@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build and package Windows App into a standard Debian (.deb) package
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# Verify required development dependencies
+source "${SCRIPT_DIR}/check-deps.sh"
+check_dev_dependencies
+
+VERSION="$(grep '^version' "${ROOT_DIR}/Cargo.toml" | head -n 1 | cut -d '"' -f 2)"
+ARCH="amd64"
+PKG_NAME="windows-app-linux_${VERSION}_${ARCH}"
+BUILD_DIR="${ROOT_DIR}/target/package-deb/${PKG_NAME}"
+OUTPUT_DIR="${ROOT_DIR}/target/packages"
+
+echo "==> Building release binary..."
+cd "${ROOT_DIR}"
+cargo build --release
+
+BIN_SRC="${ROOT_DIR}/target/release/windows-app-linux"
+if [ ! -f "${BIN_SRC}" ]; then
+    echo "Error: Release binary ${BIN_SRC} not found!"
+    exit 1
+fi
+
+echo "==> Staging Debian package layout in ${BUILD_DIR}..."
+rm -rf "${BUILD_DIR}"
+mkdir -p "${BUILD_DIR}/DEBIAN"
+mkdir -p "${BUILD_DIR}/usr/bin"
+mkdir -p "${BUILD_DIR}/usr/share/applications"
+mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/scalable/apps"
+
+# Binary
+cp "${BIN_SRC}" "${BUILD_DIR}/usr/bin/windows-app-linux"
+chmod 755 "${BUILD_DIR}/usr/bin/windows-app-linux"
+
+# Desktop entry
+cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.desktop" "${BUILD_DIR}/usr/share/applications/"
+chmod 644 "${BUILD_DIR}/usr/share/applications/com.microsoft.windowsapp.linux.desktop"
+
+# Scalable vector icon
+cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.svg" "${BUILD_DIR}/usr/share/icons/hicolor/scalable/apps/"
+chmod 644 "${BUILD_DIR}/usr/share/icons/hicolor/scalable/apps/com.microsoft.windowsapp.linux.svg"
+
+# Multi-resolution raster icons
+SIZES=("16x16" "24x24" "32x32" "48x48" "64x64" "128x128" "256x256" "512x512")
+for size in "${SIZES[@]}"; do
+    SRC_PNG="${ROOT_DIR}/resources/icons/${size}/apps/com.microsoft.windowsapp.linux.png"
+    if [ -f "${SRC_PNG}" ]; then
+        DEST_DIR="${BUILD_DIR}/usr/share/icons/hicolor/${size}/apps"
+        mkdir -p "${DEST_DIR}"
+        cp "${SRC_PNG}" "${DEST_DIR}/"
+        chmod 644 "${DEST_DIR}/com.microsoft.windowsapp.linux.png"
+    fi
+done
+
+# DEBIAN/control - strictly specifies required system runtime dependencies
+cat <<EOF > "${BUILD_DIR}/DEBIAN/control"
+Package: windows-app-linux
+Version: ${VERSION}
+Section: utils
+Priority: optional
+Architecture: ${ARCH}
+Maintainer: Windows App for Linux Contributors
+Depends: libgtk-4-1 (>= 4.12), libwebkitgtk-6.0-4 (>= 2.40), libsoup-3.0-0 (>= 3.0), libfreerdp3-3 | libfreerdp3, libwinpr3-3 | libwinpr3
+Description: Microsoft Windows 365 Cloud PC and Azure Virtual Desktop client for Linux
+ Native Linux client written in Rust using GTK 4 and WebKitGTK 6 for connecting
+ to Windows 365 Cloud PCs and AVD environments.
+EOF
+
+# DEBIAN/postinst
+cat <<'EOF' > "${BUILD_DIR}/DEBIAN/postinst"
+#!/bin/sh
+set -e
+if [ -x /usr/bin/update-desktop-database ]; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+if [ -x /usr/bin/gtk-update-icon-cache ]; then
+    gtk-update-icon-cache -q -f -t /usr/share/icons/hicolor || true
+fi
+EOF
+chmod 755 "${BUILD_DIR}/DEBIAN/postinst"
+
+# DEBIAN/postrm
+cat <<'EOF' > "${BUILD_DIR}/DEBIAN/postrm"
+#!/bin/sh
+set -e
+if [ -x /usr/bin/update-desktop-database ]; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+if [ -x /usr/bin/gtk-update-icon-cache ]; then
+    gtk-update-icon-cache -q -f -t /usr/share/icons/hicolor || true
+fi
+EOF
+chmod 755 "${BUILD_DIR}/DEBIAN/postrm"
+
+echo "==> Building binary package using dpkg-deb..."
+mkdir -p "${OUTPUT_DIR}"
+dpkg-deb --build --root-owner-group "${BUILD_DIR}" "${OUTPUT_DIR}/${PKG_NAME}.deb"
+
+echo "==> Debian package generated successfully:"
+echo "    ${OUTPUT_DIR}/${PKG_NAME}.deb"
+ls -lh "${OUTPUT_DIR}/${PKG_NAME}.deb"

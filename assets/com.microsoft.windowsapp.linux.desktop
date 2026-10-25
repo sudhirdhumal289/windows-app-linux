@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Windows App
+Comment=Connect to Windows 365 Cloud PCs and Azure Virtual Desktops
+Exec=windows-app-linux
+Icon=com.microsoft.windowsapp.linux
+Terminal=false
+Type=Application
+Categories=Network;RemoteAccess;
+StartupWMClass=com.microsoft.windowsapp.linux
+Keywords=windows;cloudpc;avd;rdp;remote;desktop;365;

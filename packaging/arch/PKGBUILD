@@ -1,0 +1,31 @@
+# Maintainer: Windows App for Linux Contributors
+pkgname=windows-app-linux
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Microsoft Windows 365 Cloud PC and Azure Virtual Desktop client for Linux"
+arch=('x86_64')
+license=('Apache-2.0' 'MIT')
+depends=('gtk4' 'webkitgtk-6.0' 'libsoup3')
+optdepends=(
+    'freerdp: Native Wayland and X11 FreeRDP 3 client'
+)
+makedepends=('cargo' 'pkgconf')
+
+build() {
+    cd "${startdir}/../.."
+    cargo build --release
+}
+
+package() {
+    cd "${startdir}/../.."
+    install -Dm755 "target/release/windows-app-linux" "${pkgdir}/usr/bin/windows-app-linux"
+    install -Dm644 "assets/com.microsoft.windowsapp.linux.desktop" "${pkgdir}/usr/share/applications/com.microsoft.windowsapp.linux.desktop"
+    install -Dm644 "assets/com.microsoft.windowsapp.linux.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/com.microsoft.windowsapp.linux.svg"
+
+    for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
+        if [ -f "resources/icons/${size}/apps/com.microsoft.windowsapp.linux.png" ]; then
+            install -Dm644 "resources/icons/${size}/apps/com.microsoft.windowsapp.linux.png" \
+                "${pkgdir}/usr/share/icons/hicolor/${size}/apps/com.microsoft.windowsapp.linux.png"
+        fi
+    done
+}
