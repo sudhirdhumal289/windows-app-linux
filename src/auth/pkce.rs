@@ -1,9 +1,9 @@
-//! PKCE (RFC 7636) challenge and verifier generation.
+//! PKCE (RFC 7636) verifier and S256 challenge generation.
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use ring::digest::{digest, SHA256};
-use uuid::Uuid;
+use ring::rand::{SecureRandom, SystemRandom};
 
 #[derive(Debug, Clone)]
 pub struct Pkce {
@@ -21,16 +21,33 @@ impl Pkce {
     #[must_use]
     pub fn new() -> Self {
         let mut random_bytes = [0u8; 32];
-        random_bytes[0..16].copy_from_slice(Uuid::new_v4().as_bytes());
-        random_bytes[16..32].copy_from_slice(Uuid::new_v4().as_bytes());
-
+        SystemRandom::new()
+            .fill(&mut random_bytes)
+            .expect("system RNG unavailable");
         let verifier = URL_SAFE_NO_PAD.encode(random_bytes);
-        let hash = digest(&SHA256, verifier.as_bytes());
-        let challenge = URL_SAFE_NO_PAD.encode(hash.as_ref());
-
+        let challenge = URL_SAFE_NO_PAD.encode(digest(&SHA256, verifier.as_bytes()).as_ref());
         Self {
             verifier,
             challenge,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn verifier_is_rfc7636_compliant_and_unique() {
+        let a = Pkce::new();
+        let b = Pkce::new();
+        assert_ne!(a.verifier, b.verifier);
+        assert_eq!(a.verifier.len(), 43);
+        assert!(a
+            .verifier
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        let expected = URL_SAFE_NO_PAD.encode(digest(&SHA256, a.verifier.as_bytes()).as_ref());
+        assert_eq!(a.challenge, expected);
     }
 }

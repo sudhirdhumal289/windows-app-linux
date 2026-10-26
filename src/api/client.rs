@@ -1,9 +1,11 @@
-//! Microsoft Graph and Windows 365 API client for Cloud PCs.
+//! Authorized HTTP client for Microsoft Graph and the Windows 365 end-user API.
 
 use crate::auth::AuthManager;
-use crate::config::{CLIENT_VERSION, GRAPH_BASE_URL, SOURCE_CLIENT};
+use crate::config::{
+    CLIENT_VERSION, GRAPH_BASE_URL, GRAPH_DEFAULT_SCOPE, SOURCE_CLIENT, W365_USER_AGENT,
+};
 use crate::error::{AppError, Result};
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Client, Method, Response};
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
@@ -14,7 +16,6 @@ use uuid::Uuid;
 pub struct GraphApiClient {
     http: Client,
     auth: Arc<AuthManager>,
-    base_url: String,
     data_boundary: String,
 }
 
@@ -27,68 +28,78 @@ impl GraphApiClient {
                 .build()
                 .unwrap_or_default(),
             auth,
-            base_url: GRAPH_BASE_URL.to_string(),
             data_boundary: data_boundary.to_string(),
         }
     }
 
-    /// Builds the standard header set extracted from the Windows App MSIX reverse-engineering
+    #[must_use]
+    pub fn auth(&self) -> &Arc<AuthManager> {
+        &self.auth
+    }
+
+    /// Shared HTTP connection pool, for requests that use a different token.
+    #[must_use]
+    pub fn http(&self) -> &Client {
+        &self.http
+    }
+
+    /// Headers the Windows App sends to the Windows 365 service.
     fn build_headers(&self, token: &str) -> Result<HeaderMap> {
+        let header =
+            |v: &str| HeaderValue::from_str(v).map_err(|e| AppError::Config(e.to_string()));
         let mut headers = HeaderMap::new();
         headers.insert(
             CONTENT_TYPE,
             HeaderValue::from_static("application/json;charset=UTF-8"),
         );
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(|e| AppError::Config(e.to_string()))?,
-        );
-        headers.insert(
-            "client-request-id",
-            HeaderValue::from_str(&Uuid::new_v4().to_string())
-                .map_err(|e| AppError::Config(e.to_string()))?,
-        );
-        headers.insert(
-            "cpc-data-boundary",
-            HeaderValue::from_str(&self.data_boundary)
-                .map_err(|e| AppError::Config(e.to_string()))?,
-        );
+        let mut auth_value = header(&format!("Bearer {token}"))?;
+        auth_value.set_sensitive(true);
+        headers.insert(AUTHORIZATION, auth_value);
+        headers.insert("client-request-id", header(&Uuid::new_v4().to_string())?);
+        headers.insert("cpc-data-boundary", header(&self.data_boundary)?);
         headers.insert("source-client", HeaderValue::from_static(SOURCE_CLIENT));
         headers.insert("client-version", HeaderValue::from_static(CLIENT_VERSION));
-        headers.insert("x-ms-user-agent", HeaderValue::from_static("win365.nxt/2.0.1484.0"));
+        headers.insert("x-ms-user-agent", HeaderValue::from_static(W365_USER_AGENT));
         Ok(headers)
     }
 
-    /// Sends an authorized request returning the Response regardless of HTTP status code
+    fn url_for(path: &str) -> String {
+        if path.starts_with("https://") {
+            path.to_string()
+        } else {
+            format!(
+                "{}/{}",
+                GRAPH_BASE_URL.trim_end_matches('/'),
+                path.trim_start_matches('/')
+            )
+        }
+    }
+
+    /// Sends an authorized request and returns the response whatever its status.
     pub async fn send_request(
         &self,
         method: Method,
         path: &str,
         body: Option<serde_json::Value>,
     ) -> Result<Response> {
-        let token = self.auth.get_valid_token().await?;
-        let headers = self.build_headers(&token)?;
-        let url = if path.starts_with("http://") || path.starts_with("https://") {
-            path.to_string()
+        let url = Self::url_for(path);
+        // The sign-in token is for the Windows 365 service; Graph needs its own audience.
+        let token = if is_graph_url(&url) {
+            self.auth.token_for_scope(GRAPH_DEFAULT_SCOPE).await?
         } else {
-            format!(
-                "{}/{}",
-                self.base_url.trim_end_matches('/'),
-                path.trim_start_matches('/')
-            )
+            self.auth.get_valid_token().await?
         };
-
-        let mut req = self.http.request(method, &url).headers(headers);
-        if let Some(b) = body {
-            req = req.json(&b);
+        let mut req = self
+            .http
+            .request(method, url)
+            .headers(self.build_headers(&token)?);
+        if let Some(body) = body {
+            req = req.json(&body);
         }
-
-        let res = req.send().await?;
-        Ok(res)
+        Ok(req.send().await?)
     }
 
-    /// Executes an authorized request to Microsoft Graph or Windows 365, checking for success
+    /// Sends an authorized request, mapping non-success statuses to [`AppError::GraphApi`].
     pub async fn execute_request(
         &self,
         method: Method,
@@ -96,28 +107,62 @@ impl GraphApiClient {
         body: Option<serde_json::Value>,
     ) -> Result<Response> {
         let res = self.send_request(method, path, body).await?;
-        if !res.status().is_success() {
-            let status = res.status().as_u16();
-            let msg = res.text().await.unwrap_or_default();
-            return Err(AppError::GraphApi {
-                status,
-                message: msg,
-            });
+        if res.status().is_success() {
+            Ok(res)
+        } else {
+            Err(AppError::GraphApi {
+                status: res.status().as_u16(),
+                message: res.text().await.unwrap_or_default(),
+            })
         }
-
-        Ok(res)
     }
 
-    /// Fetches and deserializes a JSON payload from Graph API or Windows 365
     pub async fn get_json<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let res = self.execute_request(Method::GET, path, None).await?;
-        let data = res.json::<T>().await?;
-        Ok(data)
+        Ok(self
+            .execute_request(Method::GET, path, None)
+            .await?
+            .json()
+            .await?)
     }
 
-    /// Posts a JSON payload and returns the response
     pub async fn post_action(&self, path: &str, body: Option<serde_json::Value>) -> Result<()> {
         self.execute_request(Method::POST, path, body).await?;
         Ok(())
+    }
+}
+
+fn is_graph_url(url: &str) -> bool {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| {
+            u.host_str()
+                .map(|h| h.eq_ignore_ascii_case("graph.microsoft.com"))
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolves_relative_and_absolute_urls() {
+        assert_eq!(
+            GraphApiClient::url_for("/me/cloudPCs"),
+            "https://graph.microsoft.com/beta/me/cloudPCs"
+        );
+        assert_eq!(
+            GraphApiClient::url_for("https://windows365.microsoft.com/u/api"),
+            "https://windows365.microsoft.com/u/api"
+        );
+    }
+
+    #[test]
+    fn graph_urls_are_detected() {
+        assert!(is_graph_url(&GraphApiClient::url_for("me/cloudPCs")));
+        assert!(!is_graph_url(
+            "https://windows365.microsoft.com/u/api/v1/cloudPCs"
+        ));
+        assert!(!is_graph_url("https://graph.microsoft.com.evil.example/x"));
     }
 }

@@ -1,12 +1,72 @@
-//! Cloud PC service endpoints and lifecycle operations.
+//! Cloud PC discovery, lifecycle actions and RDP launch material.
 
 use crate::api::client::GraphApiClient;
-use crate::error::Result;
+use crate::config::{AVD_RESOURCE_SCOPE, RDWEB_FEED_URL, RDWEB_USER_AGENT, WINDOWS_365_BASE_URL};
+use crate::error::{AppError, Result};
 use crate::models::{
-    CloudPc, ODataResponse, RdpConnectionConfig, W365CloudPcItem, Windows365V2Response,
+    CloudPc, CloudPcAction, ODataResponse, RemoteActionResult, W365CloudPcItem,
+    Windows365V2Response,
 };
 use log::{debug, warn};
+use reqwest::Method;
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use serde_json::json;
+use std::time::Duration;
+use url::Url;
+
+/// Interval between status polls while an action runs.
+const POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// Troubleshooting can take several minutes.
+const TROUBLESHOOT_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+
+/// A restore point of a Cloud PC.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub id: String,
+    #[serde(default)]
+    pub created_date_time: Option<String>,
+    #[serde(default)]
+    pub snapshot_type: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotList {
+    #[serde(default)]
+    snapshots: Vec<Snapshot>,
+}
+
+/// Result of a troubleshoot run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TroubleshootOutcome {
+    NoIssues,
+    /// Problems were found and fixed.
+    Fixed,
+    /// Problems remain; the message says what the user (or admin) should do.
+    Failed(String),
+    /// Still running when we stopped waiting.
+    StillRunning,
+}
+
+/// Everything needed to start an RDP session to a Cloud PC through the AVD gateway.
+#[derive(Clone)]
+pub struct RdpLaunch {
+    /// Signed `.rdp` file content from the RD Web feed.
+    pub rdp_file: String,
+    /// Bearer token for the AVD ARM gateway.
+    pub gateway_token: String,
+}
+
+impl std::fmt::Debug for RdpLaunch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RdpLaunch")
+            .field("rdp_file_len", &self.rdp_file.len())
+            .finish_non_exhaustive()
+    }
+}
 
 pub struct CloudPcService {
     client: GraphApiClient,
@@ -18,332 +78,504 @@ impl CloudPcService {
         Self { client }
     }
 
-    /// Fetches all Cloud PCs assigned to the authenticated user.
-    /// Tries the official Windows 365 End User API (v2 & v1) first, falling back to Microsoft Graph.
+    #[must_use]
+    pub fn client(&self) -> &GraphApiClient {
+        &self.client
+    }
+
+    /// Lists the user's Cloud PCs: Windows 365 end-user API v2, then v1, then Graph.
+    /// Accounts without a Cloud PC license yield an empty list rather than an error.
     pub async fn list_user_cloud_pcs(&self) -> Result<Vec<CloudPc>> {
-        debug!("Fetching user Cloud PCs from Windows 365 End User API (v2)...");
-
-        // Try Windows 365 End User v2 API (official Windows App endpoint)
-        let w365_v2_url = "https://windows365.microsoft.com/u/api/v2/cloudPCs?extend=IsDefault&licenseCategories=Dedicated,Flex,FrontlineShared";
-        match self
-            .client
-            .send_request(reqwest::Method::GET, w365_v2_url, None)
+        let v2 = format!(
+            "{WINDOWS_365_BASE_URL}/u/api/v2/cloudPCs?extend=IsDefault&licenseCategories=Dedicated,Flex,FrontlineShared"
+        );
+        if let Some(body) = self
+            .try_get::<Windows365V2Response>(&v2, "Windows 365 v2")
             .await
         {
-            Ok(res) if res.status().is_success() => {
-                match res.json::<Windows365V2Response>().await {
-                    Ok(v2_body) => {
-                        let pcs = v2_body.into_cloud_pcs();
-                        if !pcs.is_empty() {
-                            debug!(
-                                "Successfully retrieved {} Cloud PCs from Windows 365 v2 API",
-                                pcs.len()
-                            );
-                            return Ok(pcs);
-                        }
-                        debug!("Windows 365 v2 API returned 0 Cloud PCs, checking v1...");
-                    }
-                    Err(e) => {
-                        warn!("Failed to deserialize Windows 365 v2 response: {e}");
-                    }
-                }
-            }
-            Ok(res) => {
-                warn!(
-                    "Windows 365 v2 API returned HTTP {}, trying v1",
-                    res.status()
-                );
-            }
-            Err(e) => {
-                warn!("Windows 365 v2 request failed: {e}");
+            let pcs = body.into_cloud_pcs();
+            if !pcs.is_empty() {
+                return Ok(pcs);
             }
         }
 
-        // Try Windows 365 End User v1 API
-        debug!("Trying Windows 365 End User API (v1)...");
-        let w365_v1_url = "https://windows365.microsoft.com/u/api/v1/cloudPCs?extend=IsDefault";
-        match self
-            .client
-            .send_request(reqwest::Method::GET, w365_v1_url, None)
+        let v1 = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs?extend=IsDefault");
+        if let Some(items) = self
+            .try_get::<Vec<W365CloudPcItem>>(&v1, "Windows 365 v1")
             .await
         {
-            Ok(res) if res.status().is_success() => {
-                match res.json::<Vec<W365CloudPcItem>>().await {
-                    Ok(items) => {
-                        let pcs: Vec<CloudPc> = items.into_iter().map(CloudPc::from).collect();
-                        if !pcs.is_empty() {
-                            debug!(
-                                "Successfully retrieved {} Cloud PCs from Windows 365 v1 API",
-                                pcs.len()
-                            );
-                            return Ok(pcs);
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to deserialize Windows 365 v1 response: {e}");
-                    }
-                }
-            }
-            Ok(res) => {
-                warn!("Windows 365 v1 API returned HTTP {}", res.status());
-            }
-            Err(e) => {
-                warn!("Windows 365 v1 request failed: {e}");
+            if !items.is_empty() {
+                return Ok(items.into_iter().map(CloudPc::from).collect());
             }
         }
 
-        // Fallback to Microsoft Graph only if Windows 365 API returned nothing
-        debug!("Falling back to Microsoft Graph /me/cloudPCs...");
-        match self.client.get_json::<ODataResponse<CloudPc>>("me/cloudPCs").await {
+        debug!("Falling back to Microsoft Graph /me/cloudPCs");
+        match self
+            .client
+            .get_json::<ODataResponse<CloudPc>>("me/cloudPCs")
+            .await
+        {
             Ok(response) => Ok(response.value),
-            Err(crate::error::AppError::GraphApi { status, ref message }) => {
-                // If 404 (ResourceNotFound), 403 (Forbidden/Unlicensed), or 400 (Personal Microsoft account),
-                // the account simply has no Cloud PC license or assigned desktops. Return empty list cleanly.
-                if status == 404
-                    || status == 403
-                    || status == 400
+            Err(AppError::GraphApi { status, message })
+                if matches!(status, 400 | 403 | 404)
                     || message.contains("ResourceNotFound")
-                    || message.contains("License")
-                {
-                    debug!("Account has no Cloud PC resources (HTTP {status}). Returning empty desktop list.");
-                    Ok(Vec::new())
-                } else {
-                    Err(crate::error::AppError::GraphApi {
-                        status,
-                        message: message.clone(),
-                    })
-                }
+                    || message.contains("License") =>
+            {
+                debug!("Account has no Cloud PC resources (HTTP {status})");
+                Ok(Vec::new())
             }
             Err(e) => Err(e),
         }
     }
 
-    /// Retrieves details for a specific Cloud PC.
-    pub async fn get_cloud_pc_by_id(&self, id: &str) -> Result<CloudPc> {
-        // Try Windows 365 End User API v1 first
-        let w365_url = format!("https://windows365.microsoft.com/u/api/v1/cloudPCs/{id}");
-        if let Ok(res) = self
-            .client
-            .send_request(reqwest::Method::GET, &w365_url, None)
-            .await
-        {
-            if res.status().is_success() {
-                if let Ok(item) = res.json::<W365CloudPcItem>().await {
-                    return Ok(CloudPc::from(item));
+    /// GETs and decodes `url`, logging and swallowing failures (used for fallbacks).
+    async fn try_get<T: DeserializeOwned>(&self, url: &str, label: &str) -> Option<T> {
+        match self.client.send_request(Method::GET, url, None).await {
+            Ok(res) if res.status().is_success() => match res.json::<T>().await {
+                Ok(body) => Some(body),
+                Err(e) => {
+                    warn!("{label}: unexpected response: {e}");
+                    None
                 }
+            },
+            Ok(res) => {
+                warn!("{label}: HTTP {}", res.status());
+                None
+            }
+            Err(e) => {
+                warn!("{label}: request failed: {e}");
+                None
             }
         }
-
-        let path = format!("me/cloudPCs/{id}");
-        self.client.get_json(&path).await
     }
 
-    /// Triggers a reboot of the specified Cloud PC.
     pub async fn restart_cloud_pc(&self, id: &str) -> Result<()> {
-        debug!("Initiating restart for Cloud PC [{id}]...");
-
-        // Try Windows 365 reboot endpoint
-        let w365_url = format!("https://windows365.microsoft.com/u/api/v1/cloudPCs/{id}/reboot");
-        if let Ok(res) = self
+        let w365 = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}/reboot");
+        match self
             .client
-            .send_request(reqwest::Method::POST, &w365_url, Some(json!({})))
+            .send_request(Method::POST, &w365, Some(json!({})))
             .await
         {
-            if res.status().is_success() {
-                debug!("Windows 365 reboot command submitted successfully");
-                return Ok(());
+            Ok(res) if res.status().is_success() => return Ok(()),
+            Ok(res) if matches!(res.status().as_u16(), 400 | 409) => {
+                let status = res.status().as_u16();
+                let body = res.text().await.unwrap_or_default();
+                return Err(action_error(CloudPcAction::Restart, status, &body));
             }
+            Ok(res) => warn!("Windows 365 reboot: HTTP {}, trying Graph", res.status()),
+            Err(e) => warn!("Windows 365 reboot failed: {e}, trying Graph"),
         }
-
-        let path = format!("me/cloudPCs/{id}/restart");
-        self.client.post_action(&path, None).await
+        self.client
+            .post_action(&format!("me/cloudPCs/{id}/restart"), None)
+            .await
     }
 
-    /// Triggers automated troubleshooting and health diagnostics.
-
-    /// Renames the specified Cloud PC.
     pub async fn rename_cloud_pc(&self, id: &str, new_name: &str) -> Result<()> {
-        debug!("Renaming Cloud PC [{id}] to [{new_name}]...");
-        let path = format!("me/cloudPCs/{id}/rename");
-        let body = serde_json::json!({ "displayName": new_name });
-        self.client.post_action(&path, Some(body)).await
-    }
-
-    pub async fn troubleshoot_cloud_pc(&self, id: &str) -> Result<()> {
-        debug!("Initiating diagnostic troubleshoot for Cloud PC [{id}]...");
-
-        // Try Windows 365 troubleshoot endpoint
-        let w365_url =
-            format!("https://windows365.microsoft.com/u/api/v1/cloudPCs/{id}/troubleshoot");
-        if let Ok(res) = self
+        let w365 = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}/rename");
+        match self
             .client
-            .send_request(reqwest::Method::POST, &w365_url, Some(json!({})))
+            .send_request(
+                Method::POST,
+                &w365,
+                Some(json!({ "workspaceName": new_name })),
+            )
             .await
         {
-            if res.status().is_success() {
-                debug!("Windows 365 troubleshoot command submitted successfully");
-                return Ok(());
+            Ok(res) if res.status().is_success() => return Ok(()),
+            Ok(res) if matches!(res.status().as_u16(), 400 | 409) => {
+                let status = res.status().as_u16();
+                let body = res.text().await.unwrap_or_default();
+                return Err(action_error(CloudPcAction::Rename, status, &body));
             }
+            Ok(res) => warn!("Windows 365 rename: HTTP {}, trying Graph", res.status()),
+            Err(e) => warn!("Windows 365 rename failed: {e}, trying Graph"),
         }
-
-        let path = format!("me/cloudPCs/{id}/troubleshoot");
-        self.client.post_action(&path, None).await
+        self.client
+            .post_action(
+                &format!("me/cloudPCs/{id}/rename"),
+                Some(json!({ "displayName": new_name })),
+            )
+            .await
     }
 
-    /// Fetches the official signed RDP configuration and AVD bearer token for connecting to the Cloud PC.
-    pub async fn fetch_rdp_file_and_token(&self, pc: &CloudPc) -> Result<(String, String)> {
-        debug!(
-            "Retrieving AVD authorization token and official signed RDP configuration for [{}]...",
-            pc.display_name
-        );
+    /// Current state of one Cloud PC (status, last action result, …).
+    pub async fn get_cloud_pc(&self, id: &str) -> Result<CloudPc> {
+        let url = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}");
+        let item: W365CloudPcItem = self.client.get_json(&url).await?;
+        Ok(CloudPc::from(item))
+    }
 
-        let tokens = crate::config::AppConfig::load_tokens().ok_or_else(|| {
-            crate::error::AppError::Auth("No authentication tokens found".to_string())
-        })?;
-        let refresh_token = tokens.refresh_token.as_ref().ok_or_else(|| {
-            crate::error::AppError::Auth(
-                "No refresh token available to generate AVD session".to_string(),
-            )
-        })?;
-
-        // 1. Exchange refresh token for AVD scope (9cdead84-a844-4324-93f2-b2e6bb768d07)
-        let auth_mgr = crate::auth::AuthManager::new(
-            crate::config::COMMON_AUTHORITY,
-            crate::config::WINDOWS_APP_CLIENT_ID,
-        );
-        let avd_tokens = auth_mgr
-            .refresh_access_token_for_scope(refresh_token, crate::config::AVD_RESOURCE_SCOPE)
+    /// Posts an end-user action (`reboot`, `troubleshoot`, `reset`, `restore`).
+    async fn post_w365_action(
+        &self,
+        id: &str,
+        action: CloudPcAction,
+        verb: &str,
+        body: serde_json::Value,
+    ) -> Result<()> {
+        let url = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}/{verb}");
+        let res = self
+            .client
+            .send_request(Method::POST, &url, Some(body))
             .await?;
-        let avd_token = avd_tokens.access_token;
+        if res.status().is_success() {
+            return Ok(());
+        }
+        let status = res.status().as_u16();
+        let body = res.text().await.unwrap_or_default();
+        Err(action_error(action, status, &body))
+    }
 
-        // 2. Determine tenant_id and resource_id from direct_launch_url
-        let mut tenant_id = None;
-        let mut resource_id = None;
-        if let Some(direct_url) = &pc.direct_launch_url {
-            let parts: Vec<&str> = direct_url.split('/').collect();
-            for i in 0..parts.len() {
-                if parts[i] == "tenants" && i + 1 < parts.len() {
-                    tenant_id = Some(parts[i + 1].to_string());
+    /// Rebuilds the Cloud PC from its image; all user data is lost.
+    pub async fn reset_cloud_pc(&self, id: &str) -> Result<()> {
+        self.post_w365_action(id, CloudPcAction::Reset, "reset", json!({}))
+            .await
+    }
+
+    /// Restore points the user can return to, newest first.
+    pub async fn list_snapshots(&self, id: &str) -> Result<Vec<Snapshot>> {
+        let url = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}/snapshots");
+        let mut list: SnapshotList = self.client.get_json(&url).await?;
+        list.snapshots
+            .sort_by(|a, b| b.created_date_time.cmp(&a.created_date_time));
+        Ok(list.snapshots)
+    }
+
+    pub async fn restore_cloud_pc(&self, id: &str, snapshot_id: &str) -> Result<()> {
+        self.post_w365_action(
+            id,
+            CloudPcAction::Restore,
+            "restore",
+            json!({ "snapshotId": snapshot_id }),
+        )
+        .await
+    }
+
+    /// Runs the service-side connectivity check (and repair) and waits for its result.
+    pub async fn troubleshoot_cloud_pc(&self, id: &str) -> Result<TroubleshootOutcome> {
+        let started = chrono::Utc::now();
+        self.post_w365_action(id, CloudPcAction::Troubleshoot, "troubleshoot", json!({}))
+            .await?;
+        let deadline = tokio::time::Instant::now() + TROUBLESHOOT_TIMEOUT;
+        while tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(POLL_INTERVAL).await;
+            let pc = match self.get_cloud_pc(id).await {
+                Ok(pc) => pc,
+                Err(e) => {
+                    warn!("Polling troubleshoot status failed: {e}");
+                    continue;
                 }
-                if parts[i] == "resources" && i + 1 < parts.len() {
-                    let r_part = parts[i + 1].split('?').next().unwrap_or(parts[i + 1]);
-                    resource_id = Some(r_part.to_string());
-                }
+            };
+            if let Some(outcome) = pc
+                .last_remote_action_result
+                .as_ref()
+                .and_then(|r| troubleshoot_outcome(r, started))
+            {
+                return Ok(outcome);
             }
         }
+        Ok(TroubleshootOutcome::StillRunning)
+    }
 
-        let tenant_id =
-            tenant_id.unwrap_or_else(|| "f6339a5a-2844-4c22-b81b-a241d0801fb6".to_string());
-        let resource_id = resource_id.unwrap_or_else(|| pc.id.clone());
+    /// Powers on (`start`) or deallocates (`stop`) a Windows 365 Frontline Cloud PC.
+    /// Needs the delegated Graph permission `CloudPC.ReadWrite.All`.
+    pub async fn set_power(&self, id: &str, start: bool) -> Result<()> {
+        let (verb, action) = if start {
+            ("start", CloudPcAction::Start)
+        } else {
+            ("stop", CloudPcAction::Stop)
+        };
+        match self
+            .client
+            .post_action(&format!("me/cloudPCs/{id}/{verb}"), None)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(AppError::Auth(detail)) => Err(AppError::Service(format!(
+                "Your organization has not allowed this app to {verb} Cloud PCs \
+                 (Microsoft Graph CloudPC.ReadWrite.All). Connecting also starts the Cloud PC. \
+                 ({detail})"
+            ))),
+            Err(AppError::GraphApi { status, message }) => {
+                Err(action_error(action, status, &message))
+            }
+            Err(e) => Err(e),
+        }
+    }
 
+    /// Downloads the signed `.rdp` file for `pc` and obtains an AVD gateway token.
+    pub async fn fetch_rdp_launch(&self, pc: &CloudPc) -> Result<RdpLaunch> {
+        let (tenant_id, resource_id) = launch_ids(pc)?;
         let rdp_url = format!(
-            "https://rdweb.wvd.microsoft.com/api/arm/feeddiscovery/tenants/{tenant_id}/rdps/{resource_id}.rdp?directLaunch=true"
+            "{RDWEB_FEED_URL}/tenants/{tenant_id}/rdps/{resource_id}.rdp?directLaunch=true"
         );
-        debug!("Fetching signed RDP file for Cloud PC [{resource_id}]...");
+        debug!("Fetching signed RDP file for resource {resource_id}");
+        self.fetch_rdp_file(&rdp_url).await
+    }
 
-        let client = reqwest::Client::new();
-        let res = client
-            .get(&rdp_url)
-            .header("Authorization", format!("Bearer {avd_token}"))
-            .header("User-Agent", "WindowsDesktop/1.2.5105.0")
-            .header("x-ms-user-agent", "WindowsDesktop/1.2.5105.0")
+    /// Downloads a signed `.rdp` file from the RD Web feed with an AVD gateway token.
+    pub async fn fetch_rdp_file(&self, rdp_url: &str) -> Result<RdpLaunch> {
+        let gateway_token = self
+            .client
+            .auth()
+            .token_for_scope(AVD_RESOURCE_SCOPE)
+            .await?;
+        let res = self
+            .client
+            .http()
+            .get(rdp_url)
+            .bearer_auth(&gateway_token)
+            .header("User-Agent", RDWEB_USER_AGENT)
+            .header("x-ms-user-agent", RDWEB_USER_AGENT)
             .send()
             .await?;
-
         if !res.status().is_success() {
-            let status = res.status();
-            let body = res.text().await.unwrap_or_default();
-            return Err(crate::error::AppError::GraphApi {
-                status: status.as_u16(),
-                message: format!("Failed to download AVD RDP file: {body}"),
+            return Err(AppError::GraphApi {
+                status: res.status().as_u16(),
+                message: format!(
+                    "failed to download RDP file: {}",
+                    res.text().await.unwrap_or_default()
+                ),
             });
         }
+        let rdp_file = res.text().await?;
+        if !rdp_file.contains("full address:s:") {
+            return Err(AppError::Config(
+                "RD Web returned an RDP file without a 'full address'".into(),
+            ));
+        }
+        Ok(RdpLaunch {
+            rdp_file,
+            gateway_token,
+        })
+    }
+}
 
-        let rdp_content = res.text().await?;
-        Ok((rdp_content, avd_token))
+/// RD Web resource id of a Cloud PC (used to hide it from the AVD resource list).
+#[must_use]
+pub fn launch_resource_id(pc: &CloudPc) -> Option<String> {
+    launch_ids(pc).ok().map(|(_, resource)| resource)
+}
+
+/// Maps a refused action to a user-facing error using the service's `actionResultCode`.
+fn action_error(action: CloudPcAction, status: u16, body: &str) -> AppError {
+    let json = serde_json::from_str::<serde_json::Value>(body).ok();
+    let code = json.as_ref().and_then(|v| {
+        v["actionResultCode"]
+            .as_i64()
+            .or_else(|| v["error"]["actionResultCode"].as_i64())
+    });
+    let message = match code {
+        Some(2) => "This Cloud PC no longer matches the list; refresh and try again.".into(),
+        Some(3) => "The Windows 365 service is unavailable. Try again later.".into(),
+        Some(4 | 409) => "Another action is already running on this Cloud PC.".into(),
+        Some(5) => "Your organization does not allow this action.".into(),
+        Some(6) => "This action is not available for Frontline Cloud PCs.".into(),
+        Some(2001) => "That name is not allowed. Use letters, numbers, spaces and hyphens.".into(),
+        _ if status == 409 => "Another action is already running on this Cloud PC.".into(),
+        _ if status == 403 => "You are not allowed to do this on this Cloud PC.".into(),
+        _ => {
+            let detail = json
+                .as_ref()
+                .and_then(|v| {
+                    v["error"]["message"]
+                        .as_str()
+                        .or_else(|| v["message"].as_str())
+                })
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("HTTP {status}"));
+            format!("{} failed: {detail}", action.progress_label())
+        }
+    };
+    AppError::Service(message)
+}
+
+/// Interprets the last action result once it belongs to the troubleshoot started at
+/// `started` and has finished.
+fn troubleshoot_outcome(
+    result: &RemoteActionResult,
+    started: chrono::DateTime<chrono::Utc>,
+) -> Option<TroubleshootOutcome> {
+    if !(result.is_for("Troubleshoot") || result.is_for("Diagnose")) || !result.is_finished() {
+        return None;
+    }
+    // An earlier troubleshoot's result is still reported until the new one registers.
+    let when = result
+        .last_updated_date_time
+        .as_deref()
+        .or(result.start_date_time.as_deref())
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok());
+    if when.is_some_and(|t| t < started - chrono::Duration::minutes(1)) {
+        return None;
+    }
+    let code = result.code().filter(|c| !c.is_empty());
+    Some(if result.succeeded() {
+        match code {
+            Some(c) if !c.eq_ignore_ascii_case("Available") => TroubleshootOutcome::Fixed,
+            _ => TroubleshootOutcome::NoIssues,
+        }
+    } else {
+        TroubleshootOutcome::Failed(troubleshoot_failure_message(code.unwrap_or_default()))
+    })
+}
+
+fn troubleshoot_failure_message(code: &str) -> String {
+    let ask_admin = |what: &str| {
+        format!("You can't connect to this Cloud PC right now. Ask your admin to {what}.")
+    };
+    match code {
+        "ErrorDomainJoinedFailed" => ask_admin("join this Cloud PC to a domain"),
+        "ErrorDomainReachableFailed" => ask_admin("resolve issues connecting to the domain"),
+        "ErrorDomainTrustFailed" => ask_admin("resolve the domain trust issue"),
+        "ErrorUrlsNotAccessible" => {
+            ask_admin("unblock the URLs that your Cloud PC uses to connect")
+        }
+        "ErrorDenyTSConnections" => {
+            ask_admin("update the group policy to allow remote connections")
+        }
+        "ErrorVMDNSIssue" => ask_admin("resolve DNS issues"),
+        "ErrorVMNetworkIssue" => ask_admin("resolve network issues"),
+        "ErrorNotEnoughDiskSpace" => {
+            "Your Cloud PC is out of disk space. Free up space or contact your admin.".into()
+        }
+        "ErrorSxsListenerNotReady" | "ErrorRDAgentBootLoaderStopped" | "ErrorVMAgentUnavailable" => {
+            "You can't connect to this Cloud PC right now. Try resetting your Cloud PC or contact your admin.".into()
+        }
+        _ => "Something's preventing you from connecting to this Cloud PC. Try again in a few minutes or contact your admin.".into(),
+    }
+}
+
+/// Extracts `(tenant id, resource id)` from the Cloud PC's direct-launch URL
+/// (`…/tenants/{tenant}/resources/{resource}?…`).
+fn launch_ids(pc: &CloudPc) -> Result<(String, String)> {
+    let url = pc
+        .direct_launch_url
+        .as_deref()
+        .and_then(|u| Url::parse(u).ok())
+        .ok_or_else(|| {
+            AppError::Config(format!(
+                "'{}' has no direct-launch URL; it may still be provisioning",
+                pc.display_name
+            ))
+        })?;
+    let segments: Vec<&str> = url
+        .path_segments()
+        .map(Iterator::collect)
+        .unwrap_or_default();
+    let after = |name: &str| {
+        segments
+            .windows(2)
+            .find(|w| w[0].eq_ignore_ascii_case(name) && !w[1].is_empty())
+            .map(|w| w[1].to_string())
+    };
+    let tenant = after("tenants")
+        .ok_or_else(|| AppError::Config("direct-launch URL does not identify the tenant".into()))?;
+    let resource = after("resources").unwrap_or_else(|| pc.id.clone());
+    Ok((tenant, resource))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pc(url: Option<&str>) -> CloudPc {
+        serde_json::from_value(json!({
+            "id": "pc-id",
+            "displayName": "PC",
+            "directLaunchURL": url,
+        }))
+        .unwrap()
     }
 
-    /// Retrieves launch parameters and connection gateway address for a Cloud PC session.
-    pub async fn get_launch_info(&self, id: &str) -> Result<RdpConnectionConfig> {
-        debug!("Fetching launch configuration for Cloud PC [{id}]...");
+    #[test]
+    fn parses_launch_ids() {
+        let p = pc(Some(
+            "https://rdweb.wvd.microsoft.com/api/arm/weblaunch/tenants/t-1/resources/r-2?x=1",
+        ));
+        assert_eq!(launch_ids(&p).unwrap(), ("t-1".into(), "r-2".into()));
 
-        // Try getting Cloud PC details first to extract directLaunchURL or systemName
-        let pc_details = self.get_cloud_pc_by_id(id).await.ok();
+        let p = pc(Some(
+            "https://rdweb.wvd.microsoft.com/api/arm/weblaunch/tenants/t-1",
+        ));
+        assert_eq!(launch_ids(&p).unwrap(), ("t-1".into(), "pc-id".into()));
+    }
 
-        let host = pc_details
-            .as_ref()
-            .and_then(|p| p.managed_device_name.as_deref())
-            .map(|name| format!("{name}.cloudpc.microsoft.com"))
-            .unwrap_or_else(|| format!("{id}.cloudpc.microsoft.com"));
+    #[test]
+    fn rejects_missing_tenant() {
+        assert!(launch_ids(&pc(None)).is_err());
+        assert!(launch_ids(&pc(Some("https://rdweb.wvd.microsoft.com/x/resources/r"))).is_err());
+    }
 
-        let direct_launch_url = pc_details
-            .as_ref()
-            .and_then(|p| p.direct_launch_url.clone());
+    #[test]
+    fn maps_action_result_codes() {
+        let msg = |code: i64| {
+            action_error(
+                CloudPcAction::Reset,
+                400,
+                &json!({ "actionResultCode": code }).to_string(),
+            )
+            .to_string()
+        };
+        assert!(msg(4).contains("already running"));
+        assert!(msg(6).contains("Frontline"));
+        assert!(msg(2001).contains("name"));
+        let other = action_error(CloudPcAction::Reset, 500, r#"{"error":{"message":"boom"}}"#);
+        assert_eq!(other.to_string(), "Resetting failed: boom");
+    }
 
-        // Try Windows 365 End User API first
-        let w365_url =
-            format!("https://windows365.microsoft.com/u/api/v1/cloudPCs/{id}/getLaunchInfo");
-        if let Ok(res) = self
-            .client
-            .send_request(reqwest::Method::POST, &w365_url, Some(json!({})))
-            .await
-        {
-            if res.status().is_success() {
-                if let Ok(data) = res.json::<serde_json::Value>().await {
-                    let full_address = data["cloudPcHost"]
-                        .as_str()
-                        .or_else(|| data["fullAddress"].as_str())
-                        .map(ToString::to_string)
-                        .unwrap_or(host.clone());
-                    let gateway = data["gatewayUrl"]
-                        .as_str()
-                        .or_else(|| data["gatewayHostname"].as_str())
-                        .map(ToString::to_string)
-                        .or_else(|| Some("rdgateway.wvd.microsoft.com".to_string()));
-
-                    return Ok(RdpConnectionConfig {
-                        full_address,
-                        gateway_hostname: gateway,
-                        direct_launch_url,
-                        ..Default::default()
-                    });
-                }
-            }
+    #[test]
+    fn troubleshoot_results() {
+        let started: chrono::DateTime<chrono::Utc> =
+            chrono::DateTime::parse_from_rfc3339("2025-01-01T10:00:00Z")
+                .unwrap()
+                .into();
+        let result = |name: &str, state: &str, code: Option<&str>, at: &str| RemoteActionResult {
+            action_name: Some(name.into()),
+            action_state: Some(state.into()),
+            start_date_time: None,
+            last_updated_date_time: Some(at.into()),
+            status_details: Some(crate::models::ActionStatusDetails {
+                code: code.map(str::to_string),
+                message: None,
+            }),
+        };
+        let now = "2025-01-01T10:05:00Z";
+        assert_eq!(
+            troubleshoot_outcome(&result("Troubleshoot", "active", None, now), started),
+            None
+        );
+        assert_eq!(
+            troubleshoot_outcome(&result("Restart", "done", None, now), started),
+            None
+        );
+        assert_eq!(
+            troubleshoot_outcome(
+                &result("Troubleshoot", "done", None, "2024-12-01T00:00:00Z"),
+                started
+            ),
+            None,
+            "stale result"
+        );
+        assert_eq!(
+            troubleshoot_outcome(
+                &result("Troubleshoot", "done", Some("Available"), now),
+                started
+            ),
+            Some(TroubleshootOutcome::NoIssues)
+        );
+        assert_eq!(
+            troubleshoot_outcome(
+                &result("Troubleshoot", "done", Some("Repaired"), now),
+                started
+            ),
+            Some(TroubleshootOutcome::Fixed)
+        );
+        match troubleshoot_outcome(
+            &result("Troubleshoot", "failed", Some("ErrorVMDNSIssue"), now),
+            started,
+        ) {
+            Some(TroubleshootOutcome::Failed(m)) => assert!(m.contains("DNS")),
+            other => panic!("{other:?}"),
         }
-
-        let path = format!("me/cloudPCs/{id}/getCloudPcLaunchInfo");
-        if let Ok(res) = self
-            .client
-            .execute_request(reqwest::Method::POST, &path, Some(json!({})))
-            .await
-        {
-            if let Ok(data) = res.json::<serde_json::Value>().await {
-                let full_address = data["cloudPcHost"]
-                    .as_str()
-                    .or_else(|| data["fullAddress"].as_str())
-                    .map(ToString::to_string)
-                    .unwrap_or(host.clone());
-                let gateway = data["gatewayUrl"]
-                    .as_str()
-                    .or_else(|| data["gatewayHostname"].as_str())
-                    .map(ToString::to_string)
-                    .or_else(|| Some("rdgateway.wvd.microsoft.com".to_string()));
-
-                return Ok(RdpConnectionConfig {
-                    full_address,
-                    gateway_hostname: gateway,
-                    direct_launch_url,
-                    ..Default::default()
-                });
-            }
-        }
-
-        // Standard AVD / Cloud PC RDP addressing fallback
-        Ok(RdpConnectionConfig {
-            full_address: host,
-            gateway_hostname: Some("rdgateway.wvd.microsoft.com".to_string()),
-            direct_launch_url,
-            ..Default::default()
-        })
     }
 }

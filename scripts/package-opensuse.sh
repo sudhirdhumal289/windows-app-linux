@@ -35,6 +35,8 @@ mkdir -p "${OUTPUT_DIR}"
 cp "${BIN_SRC}" "${RPM_TOPDIR}/SOURCES/"
 cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.desktop" "${RPM_TOPDIR}/SOURCES/"
 cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.svg" "${RPM_TOPDIR}/SOURCES/"
+cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.search-provider.ini" "${RPM_TOPDIR}/SOURCES/"
+cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.service" "${RPM_TOPDIR}/SOURCES/"
 cp -r "${ROOT_DIR}/resources/icons" "${RPM_TOPDIR}/SOURCES/"
 cp "${ROOT_DIR}/packaging/rpm/windows-app-linux-opensuse.spec" "${RPM_TOPDIR}/SPECS/"
 

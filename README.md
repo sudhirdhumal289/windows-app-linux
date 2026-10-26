@@ -1,6 +1,6 @@
 # Windows App (Windows 365 & AVD) for Linux
 
-A native, high-performance Linux client for Microsoft Windows 365 Cloud PCs and Azure Virtual Desktop (AVD), re-engineered from the official Windows App MSIX package (`WindowsApp_x64_Release_2.0.1484.0.msix`) and built in Rust using GTK 4 (`gtk4-rs`) and WebKitGTK (`webkit6`).
+A native, high-performance Linux client for Microsoft Windows 365 Cloud PCs and Azure Virtual Desktop (AVD), re-engineered from the official Windows App MSIX package (`WindowsApp_x64_Release_2.0.1484.0.msix`) and built in Rust using GTK 4 (`gtk4-rs`), libadwaita (`libadwaita-rs`) and WebKitGTK (`webkit6`).
 
 ---
 
@@ -11,7 +11,7 @@ The application directly interoperates with Microsoft Cloud PC and Entra ID endp
 1. **Client Identity & Endpoints**:
    - **Client ID**: `4fb5cc57-dbbc-4cdc-9595-748adff5f414` (Official Microsoft Windows App PublicClientApplication)
    - **Legacy Client ID**: `a85cf173-4192-42f8-81fa-777a763e6e2c` (Azure Virtual Desktop Client)
-   - **Authority**: `https://login.microsoftonline.com/organizations` (Work or school accounts) / custom tenant routing
+   - **Authority**: `https://login.microsoftonline.com/common`
    - **Redirect URI**: `ms-appx-web://microsoft.aad.brokerplugin/4fb5cc57-dbbc-4cdc-9595-748adff5f414`
    - **Graph Inventory API**: `https://graph.microsoft.com/beta/me/cloudPCs`
    - **Gateway Brokering**: `rdgateway.wvd.microsoft.com` / `windows.cloud.microsoft`
@@ -19,40 +19,111 @@ The application directly interoperates with Microsoft Cloud PC and Entra ID endp
 2. **Required Telemetry & Request Headers**:
    - `client-request-id`: UUIDv4 per request
    - `cpc-data-boundary`: `"commercial"` or `"eu"`
-   - `source-client`: `"windows-app"`
+   - `source-client`: `"NxtClient"`
    - `client-version`: `"2.0.1484.0"`
    - `x-client-SKU`: `"MSAL.Desktop"`
-   - `x-client-Ver`: `"4.88.0.0"`
+   - `x-client-Ver`: `"4.60.0.0"`
    - `x-client-OS`: `"Microsoft Windows NT 10.0.22631.0"` (WAM broker emulation)
 
 ---
 
 ## Key Features
 
-- **Modern GTK 4 User Interface**:
-  - Compliant with GNOME Human Interface Guidelines with system light/dark theme synchronization.
-  - Fluent Windows App branding with scalable vector icons in desktop launchers, dock, and taskbar.
-  - Seamless Grid and List layout modes with persistent connection state (maintains active spinners and disabled cards across layout switches).
-  - OS-specific graphic banners with click-to-connect integration and dedicated action menus.
+- **Modern GTK 4 / libadwaita User Interface**:
+  - Follows the GNOME HIG and the system light/dark theme and accent colour; no custom theming.
+  - Grid and list layouts with persistent connection state across layout switches.
+  - **Add Connection** button (Ctrl+N) in the header bar: add a Microsoft Cloud PC (signs in to Windows 365) or a Remote PC by address (`host`, `host:port`, `[ipv6]:port`).
+  - An empty-state page when no connections exist yet.
+  - Per-PC action menus (connect, restart, rename, connection info, details; edit/export/remove for Remote PCs).
+  - **Search** (Ctrl+F or just type): filters all connections; Enter connects to the only match, or **quick-connects** to a typed address.
+  - **Recent connections**: every card shows when it was last used.
+  - **Groups**: Remote PCs can be given a group; they are sorted by group and the group is shown on the card.
+  - Status badges with provisioning progress, power state, Frontline activation and grace-period days left; **View Details** adds licence, power, provisioning, grace-period end, last sign-in and the last remote action.
 
-- **Authentication Options**:
-  - **In-App WebKitGTK 6 SSO (Default)**: Embedded browser supporting PKCE, device identity (PKeyAuth challenge signing), and 30-day persistent cookie caching for seamless SSO restarts.
-  - **Browser SSO**: Authenticate via your default system browser (Edge / Chrome) with PKCE loopback redirect.
-  - **Device Code Flow**: Authenticate via Microsoft `devicelogin` code entry.
-  - **Token Paste**: Manual authorization token entry.
+- **Cloud PC Management** (the Windows 365 end-user actions; unavailable items are disabled per PC):
+  - **Start / Stop** for Windows 365 Frontline Cloud PCs. This uses Microsoft Graph and needs the delegated `CloudPC.ReadWrite.All` permission granted by your organization; connecting also starts the PC.
+  - **Troubleshoot**: runs the service's connectivity check and repair and reports the outcome.
+  - **Restore…** to a restore point and **Reset…** (reinstall, with typed confirmation).
 
-- **First-Class RDP Client Engine Support**:
-  - **In-App Native Remote Desktop Window (Default / Recommended)**: Connects to Cloud PC and AVD sessions in-process using FreeRDP 3 C-FFI, streaming frames directly into a GTK 4 `GtkDrawingArea` via Cairo. Provides a 100% native GTK window with title bar, minimize/maximize/close, fullscreen dock, dynamic resolution resizing, and full keyboard/mouse/scroll forwarding—working seamlessly on GNOME Wayland, KDE, and X11 without requiring standalone external clients.
-  - **Pure Rust IronRDP (`ironrdp-client`)**: In-process Rust RDP client engine for direct connections.
-  - **Hardware Audio & Camera Redirection**: Bidirectional PulseAudio/PipeWire audio and low-latency webcam redirection (`MS-RDPECAM`) with VAAPI hardware acceleration.
-  - **Dependency Detection & Resolution**: Automatic startup and launch checks with built-in installation dialogs across all Linux distributions, macOS, and Windows.
+- **Azure Virtual Desktop**: desktops and RemoteApps published to your account (RD Web feed) appear next to your Cloud PCs; RemoteApps open in a session window.
 
-- **Preferences & Display Scaling**:
-  - Engine switcher (In-App Native Window [Recommended] vs IronRDP) with dirty-state save button tracking.
-  - Configurable display scaling (Auto-detected from desktop scale, 100%, 125%, 150%, 175%, 200%).
+- **Remote PCs (direct RDP)**:
+  - Domain, **RD Gateway** (optionally with separate credentials), **RemoteApp** (program and arguments) and **admin/console session**.
+  - Security protocol (Automatic, NLA, TLS, RDP), certificate policy (trust on first use, ask, always accept) and authentication (Negotiate, NTLM only, Kerberos only; Kerberos uses your `kinit` ticket).
+  - **Remember password**: stored in the system keyring (Secret Service, e.g. GNOME Keyring), never in files. Forget it from the PC's menu.
+  - **`.rdp` files**: import (Ctrl+O or Add Connection → Import RDP File), export, or open one directly (`windows-app-linux file.rdp`, or from the file manager).
+  - **Commands before connecting and after disconnecting** (set in Connection Settings, e.g. VPN or `kinit`). They run through `sh -c` with `WINDOWS_APP_NAME`, `WINDOWS_APP_ADDRESS`, `WINDOWS_APP_TARGET` and `WINDOWS_APP_PHASE` set. A failing (or over 60 s) pre-connect command cancels the connection.
+
+- **Per-Connection Settings** (Connection Settings… in each card's menu): override resolution (fit window, fixed presets or custom), graphics mode, connection quality, monitors and device redirection for one Cloud PC, AVD resource or Remote PC; everything else follows Preferences.
+
+- **Desktop Integration (Linux)**:
+  - **Activities search**: Cloud PCs, AVD resources and Remote PCs show up in GNOME Shell search and connect when chosen (search provider over D-Bus; results come from a local index, so searching never contacts Microsoft).
+  - **Show in App Launcher**: adds a launcher entry per connection (`~/.local/share/applications`).
+  - **Connect at Login**: XDG autostart entry per connection.
+  - Command line: `windows-app-linux --connect cloudpc:<id>|avd:<id>|remote:<id>` or `windows-app-linux <file.rdp>`.
+  - **Multiple accounts**: every signed-in work or school account is remembered; switch from the main menu or **Add Another Account…**.
+
+- **Authentication Options** (switchable in the sign-in window):
+  - **In-app browser (default)**: embedded WebKitGTK sign-in with PKCE, PKeyAuth device challenges and persistent SSO cookies.
+  - **Device code**: approve a code in another (e.g. Intune-managed Edge) browser.
+  - **Token paste**: last resort when Conditional Access blocks the other methods.
+
+- **Embedded FreeRDP 3 Session Window**:
+  - FreeRDP runs in-process; frames are drawn by a GTK widget, so sessions work on Wayland and X11 without external clients.
+  - Dynamic resolution follows the window (MS-RDPEDISP), with automatic reconnect.
+  - Per-session display scale (Match Display, 100–200 % presets, or a custom value up to 200 %) from the session header bar or fullscreen dock; applied live and never saved.
+  - Full keyboard (including system shortcuts while focused; **Capture System Shortcuts** can be turned off), mouse and smooth scrolling.
+  - **Session menu** (header bar and fullscreen dock): send Ctrl+Alt+Del, Ctrl+Shift+Esc, Windows, Win+L, Alt+Tab, Alt+F4 and Print Screen; **Type Clipboard Text** as keystrokes (for sign-in screens and consoles without clipboard); **Save Screenshot** (to Pictures); **View Only** (input is not sent).
+  - Clipboard: text, images and files in both directions (files copied in the session are downloaded when pasted).
+  - Server certificates you have not seen before can be reviewed and accepted once or permanently (per the connection's certificate policy).
+  - Fullscreen with a slide-down dock (Ctrl+Alt+Enter toggles fullscreen).
+  - Audio, microphone, camera and shared-folder redirection, configured in Preferences: the home or a chosen folder, **more shared folders**, and **removable drives** (USB sticks plugged in during the session appear too).
+  - **Connection quality** presets (Automatic, LAN, Broadband, Low Bandwidth) in Preferences or per connection.
+  - **Use All Monitors** in fullscreen (one remote monitor per local monitor, MS-RDPEDISP layout).
+  - Graphics pipeline with H.264 (AVC444/AVC420) and RemoteFX fallback, selectable in Preferences. Cloud PC and AVD sessions use RemoteFX when FreeRDP is older than 3.27, which cannot display hosts with screen-capture protection.
+  - USB device (`/usb`, needs a udev rule granting access to the device node), smart card and printer redirection.
+  - Live connection-quality indicator (round-trip time and bandwidth from network auto-detect) in the session header and dock.
+  - Session-host sign-in reuses the app's SSO silently and only shows a window when interaction is needed.
 
 - **Security & Privacy**:
-  - PII and authorization tokens are redacted from default logs; verbose debugging is restricted to debug builds.
+  - Tokens are stored with owner-only permissions; tokens, passwords and personal data are redacted from logs.
+  - Remote PC passwords are asked for on every connection unless you choose to remember them; remembered passwords live only in the system keyring.
+  - Unknown server certificates of Remote PCs are shown for review by default (or trusted on first use, per connection); a changed certificate is never accepted silently.
+
+---
+
+## Project Structure
+
+The crate is split into a toolkit-independent **core library** and **frontends**. Only
+the frontend touches a UI toolkit, so native Windows (WinUI) and macOS (AppKit/SwiftUI)
+frontends can be added without changing the core.
+
+| Module | Responsibility |
+| :--- | :--- |
+| `config` | Preferences, sign-in profiles, constants and private file storage |
+| `auth` | Entra ID OAuth (PKCE, device code, refresh), token store, PKeyAuth, account info |
+| `api` | Microsoft Graph / Windows 365 client: Cloud PC listing, actions, RDP launch details |
+| `connections` | Saved Remote PCs (direct RDP by address, gateway, RemoteApp, security): validation and storage |
+| `overrides` | Per-connection settings that override the preferences |
+| `history` | When each connection was last used |
+| `rdp_file` | `.rdp` file import and export |
+| `launcher` | Launch targets (`--connect`), launcher/autostart entries and the desktop search index |
+| `session` | Builds the private `.rdp` file and FreeRDP arguments for a session; per-session scale choices, key combinations and typed text |
+| `rdp` | Safe wrapper around the embedded FreeRDP engine (C bridge in `src/rdp/freerdp_bridge.c`): events, frames, input, clipboard |
+| `platform` | Host-OS integration (desktop scale, USB devices, launcher/autostart entries, runtime directories, keyring secrets, connection commands) per OS |
+| `frontend::gtk` | GTK 4 / libadwaita / WebKitGTK user interface (cargo feature `gtk`, default) |
+
+The core builds without any frontend: `cargo check --lib --no-default-features`.
+
+### Adding a frontend for another OS
+
+1. Add a cargo feature (e.g. `winui`) and a `src/frontend/<name>/` module gated on it.
+2. Implement the same screens as `frontend::gtk`: main window, sign-in (embedded web view
+   for the authorization-code flow), preferences and a session window.
+3. Drive a session through `session::prepare` and `rdp::NativeRdpBridge`: forward
+   `BridgeEvent`s to the UI thread, draw `Frame`s, and send input with the bridge's
+   `send_*` methods (`rdp::keymap` and `rdp::input` hold the toolkit-neutral helpers).
+4. Add the OS-specific parts to `platform` and make `build.rs` locate FreeRDP on that OS.
 
 ---
 
@@ -60,7 +131,7 @@ The application directly interoperates with Microsoft Cloud PC and Entra ID endp
 
 ### Required Development Packages
 
-The project requires GTK 4, WebKitGTK 6, libsoup 3, and FreeRDP 3 development libraries for in-process C-FFI rendering and AVD Gateway connections.
+The project requires GTK 4.14+, libadwaita 1.5+, WebKitGTK 6 (2.42+), libsoup 3, and FreeRDP 3 development libraries for in-process C-FFI rendering and AVD Gateway connections.
 
 #### Debian / Ubuntu / Linux Mint
 ```bash
@@ -69,6 +140,7 @@ sudo apt install -y \
     build-essential \
     pkg-config \
     libgtk-4-dev \
+    libadwaita-1-dev \
     libwebkitgtk-6.0-dev \
     libsoup-3.0-dev \
     freerdp3-dev \
@@ -82,6 +154,7 @@ sudo dnf install -y \
     gcc-c++ \
     pkgconfig \
     gtk4-devel \
+    libadwaita-devel \
     webkitgtk6.0-devel \
     libsoup3-devel \
     freerdp-devel \
@@ -95,6 +168,7 @@ sudo pacman -S --needed \
     base-devel \
     pkgconf \
     gtk4 \
+    libadwaita \
     webkitgtk-6.0 \
     libsoup3 \
     freerdp
@@ -106,6 +180,7 @@ sudo zypper install -y \
     patterns-devel-base-devel_basis \
     pkg-config \
     gtk4-devel \
+    libadwaita-devel \
     webkit2gtk-6_0-devel \
     libsoup-devel \
     freerdp-devel \
@@ -114,7 +189,7 @@ sudo zypper install -y \
 
 #### macOS (Homebrew)
 ```bash
-brew install gtk4 webkit2png freerdp pkg-config
+brew install gtk4 libadwaita webkit2png freerdp pkg-config
 ```
 
 ---
@@ -163,7 +238,7 @@ cargo run --release
 
 Platform packages bundle the executable binary, the `.desktop` launcher, and multi-resolution vector/raster icons directly into system paths (`/usr/bin`, `/usr/share/applications`, `/usr/share/icons/hicolor`).
 
-Each package automatically specifies **runtime dependencies** so the distribution package manager automatically installs all required shared libraries (`gtk4`, `webkitgtk-6.0`, `libsoup-3.0`, `libfreerdp3`, `libwinpr3`) when installing the package.
+Each package automatically specifies **runtime dependencies** so the distribution package manager automatically installs all required shared libraries (`gtk4`, `libadwaita`, `webkitgtk-6.0`, `libsoup-3.0`, `libfreerdp3`, `libwinpr3`) when installing the package.
 
 ### 1. Generating Packages
 
@@ -193,13 +268,13 @@ Output artifacts are generated in `target/packages/`:
 
 When packages are installed, the respective package managers resolve and install these runtime libraries:
 
-| Distribution | Required Runtime Dependencies | Recommended RDP Clients (First-Class) |
-| :--- | :--- | :--- |
-| **Debian / Ubuntu** | `libgtk-4-1 (>= 4.12)`, `libwebkitgtk-6.0-4 (>= 2.40)`, `libsoup-3.0-0 (>= 3.0)`, `libfreerdp3-3`, `libwinpr3-3` | `freerdp3-x11`, `freerdp3-wayland` |
-| **Fedora / RHEL** | `gtk4 >= 4.12`, `webkitgtk6.0 >= 2.40`, `libsoup3 >= 3.0`, `freerdp-libs >= 3.0` | `freerdp >= 3.0` |
-| **openSUSE** | `gtk4 >= 4.12`, `libwebkit2gtk-6_0-4 >= 2.40`, `libsoup-3_0-0 >= 3.0`, `libfreerdp3 >= 3.0` | `freerdp >= 3.0` |
-| **Arch Linux / Manjaro** | `gtk4`, `webkitgtk-6.0`, `libsoup3`, `freerdp` | `freerdp` |
-| **macOS** | `gtk4`, `freerdp` | `freerdp` |
+| Distribution | Required Runtime Dependencies |
+| :--- | :--- |
+| **Debian / Ubuntu** | `libgtk-4-1 (>= 4.14)`, `libadwaita-1-0 (>= 1.5)`, `libwebkitgtk-6.0-4 (>= 2.42)`, `libsoup-3.0-0 (>= 3.0)`, `libfreerdp3-3`, `libwinpr3-3` |
+| **Fedora / RHEL** | `gtk4 >= 4.14`, `libadwaita >= 1.5`, `webkitgtk6.0 >= 2.42`, `libsoup3 >= 3.0`, `freerdp-libs >= 3.0` |
+| **openSUSE** | `gtk4 >= 4.14`, `libadwaita-1-0 >= 1.5`, `libwebkit2gtk-6_0-4 >= 2.42`, `libsoup-3_0-0 >= 3.0`, `freerdp >= 3.0` |
+| **Arch Linux / Manjaro** | `gtk4`, `libadwaita`, `webkitgtk-6.0`, `libsoup3`, `freerdp` |
+| **macOS** | `gtk4`, `libadwaita`, `freerdp` |
 
 ### 3. Installing Generated Packages
 
@@ -238,6 +313,18 @@ gtk-update-icon-cache -f -t /usr/share/icons/hicolor
 
 # Launch via Application launcher or terminal:
 windows-app-linux
+
+# Desktop search: the provider is registered by these files (log out and in once
+# after installing so GNOME Shell picks it up)
+ls /usr/share/gnome-shell/search-providers/com.microsoft.windowsapp.linux.search-provider.ini \
+   /usr/share/dbus-1/services/com.microsoft.windowsapp.linux.service
+```
+
+To let USB redirection open a device, grant your user access to it, e.g.
+`/etc/udev/rules.d/70-windows-app-usb.rules`:
+
+```
+SUBSYSTEM=="usb", ATTRS{idVendor}=="046d", ATTRS{idProduct}=="c52b", TAG+="uaccess"
 ```
 
 ---

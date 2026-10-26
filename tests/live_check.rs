@@ -1,34 +1,34 @@
+//! Live end-to-end check against the signed-in account. Run with
+//! `cargo test --test live_check -- --ignored --nocapture` after signing in with the app.
+
 use std::sync::Arc;
 use windows_app_linux::api::{CloudPcService, GraphApiClient};
 use windows_app_linux::auth::AuthManager;
-use windows_app_linux::config::{DEFAULT_AUTHORITY, OFFICIAL_CLIENT_ID};
+use windows_app_linux::config::constants::{COMMON_AUTHORITY, WINDOWS_APP_CLIENT_ID};
+use windows_app_linux::session::{self, SessionOptions};
+use windows_app_linux::AppConfig;
 
 #[tokio::test]
-#[ignore = "requires live network and active token"]
-async fn test_live_cloud_pc_fetch() {
-    let auth = Arc::new(AuthManager::new(DEFAULT_AUTHORITY, OFFICIAL_CLIENT_ID));
-
-    if let Ok(token) = auth.get_valid_token().await {
-        println!("Found valid token (len: {})", token.len());
-        let client = GraphApiClient::new(auth.clone(), "commercial");
-        let service = CloudPcService::new(client);
-
-        let pcs = service
-            .list_user_cloud_pcs()
-            .await
-            .expect("Failed to list cloud pcs");
-        assert!(!pcs.is_empty(), "Should have retrieved at least 1 Cloud PC");
-        println!("Cloud PC: {:?}", pcs[0]);
-
-        match service.fetch_rdp_file_and_token(&pcs[0]).await {
-            Ok((rdp, avd_token)) => {
-                std::fs::write("/tmp/test_cloudpc.rdp", &rdp).unwrap();
-                std::fs::write("/tmp/test_avd_token.txt", &avd_token).unwrap();
-                println!("Saved /tmp/test_cloudpc.rdp and /tmp/test_avd_token.txt");
-            }
-            Err(e) => {
-                println!("Failed to fetch rdp: {e}");
-            }
-        }
+#[ignore = "requires live network and a signed-in account"]
+async fn live_cloud_pc_launch() {
+    let auth = Arc::new(AuthManager::new(COMMON_AUTHORITY, WINDOWS_APP_CLIENT_ID));
+    if auth.get_valid_token().await.is_err() {
+        eprintln!("Not signed in; skipping");
+        return;
     }
+    let service = CloudPcService::new(GraphApiClient::new(auth, "commercial"));
+    let pcs = service
+        .list_user_cloud_pcs()
+        .await
+        .expect("listing Cloud PCs");
+    assert!(!pcs.is_empty(), "account has no Cloud PCs");
+    println!("Cloud PC: {}", pcs[0].display_name);
+
+    let launch = service
+        .fetch_rdp_launch(&pcs[0])
+        .await
+        .expect("fetching RDP launch info");
+    let opts = SessionOptions::from_config(&AppConfig::default(), 1920, 1080, 100, None);
+    let prepared = session::prepare(&launch, &opts).expect("preparing session");
+    println!("FreeRDP args: {:?}", session::redact_args(&prepared.args));
 }

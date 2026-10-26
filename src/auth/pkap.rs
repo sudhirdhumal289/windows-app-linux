@@ -61,8 +61,16 @@ impl DeviceIdentity {
         let cert_path = cert_paths.iter().find(|p| p.exists())?;
         let key_path = key_paths.iter().find(|p| p.exists())?;
 
-        debug!("Loaded device certificate and key from config directory");
-        Self::load(cert_path, key_path).ok()
+        match Self::load(cert_path, key_path) {
+            Ok(identity) => {
+                debug!("Loaded device certificate and key from {}", dir.display());
+                Some(identity)
+            }
+            Err(e) => {
+                log::warn!("Ignoring device identity in {}: {e}", dir.display());
+                None
+            }
+        }
     }
 
     /// Loads and parses the certificate and RSA private key.
@@ -72,50 +80,17 @@ impl DeviceIdentity {
         let key_raw = fs::read(key_path)
             .map_err(|e| format!("Failed to read private key {:?}: {e}", key_path))?;
 
-        // Parse certificate to raw DER base64 string
         let cert_b64 = if cert_raw.starts_with(b"-----BEGIN") {
-            let pem_str = String::from_utf8_lossy(&cert_raw);
-            let mut b64 = String::new();
-            let mut capturing = false;
-            for line in pem_str.lines() {
-                if line.starts_with("-----BEGIN") {
-                    capturing = true;
-                    continue;
-                }
-                if line.starts_with("-----END") {
-                    break;
-                }
-                if capturing {
-                    b64.push_str(line.trim());
-                }
-            }
-            if b64.is_empty() {
-                return Err("Failed to extract certificate from PEM".to_string());
-            }
-            b64
+            pem_body(&cert_raw).ok_or("Failed to extract certificate from PEM")?
         } else {
             STANDARD.encode(&cert_raw)
         };
 
-        // Parse private key (PKCS#8 DER format required by ring)
+        // ring needs PKCS#8 DER; PKCS#1 keys are wrapped below.
         let pkcs8_der = if key_raw.starts_with(b"-----BEGIN") {
-            let pem_str = String::from_utf8_lossy(&key_raw);
-            let mut b64 = String::new();
-            let mut capturing = false;
-            for line in pem_str.lines() {
-                if line.starts_with("-----BEGIN") {
-                    capturing = true;
-                    continue;
-                }
-                if line.starts_with("-----END") {
-                    break;
-                }
-                if capturing {
-                    b64.push_str(line.trim());
-                }
-            }
+            let body = pem_body(&key_raw).ok_or("Failed to extract private key from PEM")?;
             STANDARD
-                .decode(b64.as_bytes())
+                .decode(body.as_bytes())
                 .map_err(|e| format!("Failed to base64-decode private key: {e}"))?
         } else {
             key_raw
@@ -125,8 +100,9 @@ impl DeviceIdentity {
             Ok(kp) => kp,
             Err(_) => {
                 let pkcs8_wrapped = wrap_pkcs1_in_pkcs8(&pkcs8_der);
-                RsaKeyPair::from_pkcs8(&pkcs8_wrapped)
-                    .map_err(|e| format!("Failed to parse RSA key (tried PKCS#8 and PKCS#1): {e:?}"))?
+                RsaKeyPair::from_pkcs8(&pkcs8_wrapped).map_err(|e| {
+                    format!("Failed to parse RSA key (tried PKCS#8 and PKCS#1): {e:?}")
+                })?
             }
         };
 
@@ -183,6 +159,19 @@ impl DeviceIdentity {
     }
 }
 
+/// Returns the base64 body of the first PEM block in `pem`.
+fn pem_body(pem: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(pem);
+    let body: String = text
+        .lines()
+        .skip_while(|line| !line.starts_with("-----BEGIN"))
+        .skip(1)
+        .take_while(|line| !line.starts_with("-----END"))
+        .map(str::trim)
+        .collect();
+    (!body.is_empty()).then_some(body)
+}
+
 fn wrap_pkcs1_in_pkcs8(pkcs1: &[u8]) -> Vec<u8> {
     let rsa_algo_id: [u8; 15] = [
         0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00,
@@ -218,5 +207,24 @@ fn encode_asn1_length(out: &mut Vec<u8>, tag: u8, len: usize) {
         out.push((len >> 16) as u8);
         out.push(((len >> 8) & 0xff) as u8);
         out.push((len & 0xff) as u8);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_pem_body() {
+        let pem = b"junk\n-----BEGIN CERTIFICATE-----\nAAAA\n BBBB \n-----END CERTIFICATE-----\n";
+        assert_eq!(pem_body(pem).as_deref(), Some("AAAABBBB"));
+        assert_eq!(pem_body(b"-----BEGIN X-----\n-----END X-----"), None);
+    }
+
+    #[test]
+    fn asn1_lengths() {
+        let mut out = Vec::new();
+        encode_asn1_length(&mut out, 0x30, 300);
+        assert_eq!(out, [0x30, 0x82, 0x01, 0x2c]);
     }
 }

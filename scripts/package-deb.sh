@@ -41,6 +41,11 @@ chmod 755 "${BUILD_DIR}/usr/bin/windows-app-linux"
 cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.desktop" "${BUILD_DIR}/usr/share/applications/"
 chmod 644 "${BUILD_DIR}/usr/share/applications/com.microsoft.windowsapp.linux.desktop"
 
+# Desktop search (GNOME Shell search provider, started through D-Bus activation)
+mkdir -p "${BUILD_DIR}/usr/share/gnome-shell/search-providers" "${BUILD_DIR}/usr/share/dbus-1/services"
+install -m 644 "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.search-provider.ini" "${BUILD_DIR}/usr/share/gnome-shell/search-providers/"
+install -m 644 "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.service" "${BUILD_DIR}/usr/share/dbus-1/services/"
+
 # Scalable vector icon
 cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.svg" "${BUILD_DIR}/usr/share/icons/hicolor/scalable/apps/"
 chmod 644 "${BUILD_DIR}/usr/share/icons/hicolor/scalable/apps/com.microsoft.windowsapp.linux.svg"
@@ -65,7 +70,7 @@ Section: utils
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: Windows App for Linux Contributors
-Depends: libgtk-4-1 (>= 4.12), libwebkitgtk-6.0-4 (>= 2.40), libsoup-3.0-0 (>= 3.0), libfreerdp3-3 | libfreerdp3, libwinpr3-3 | libwinpr3
+Depends: libgtk-4-1 (>= 4.14), libadwaita-1-0 (>= 1.5), libwebkitgtk-6.0-4 (>= 2.42), libsoup-3.0-0 (>= 3.0), libfreerdp3-3 | libfreerdp3, libwinpr3-3 | libwinpr3
 Description: Microsoft Windows 365 Cloud PC and Azure Virtual Desktop client for Linux
  Native Linux client written in Rust using GTK 4 and WebKitGTK 6 for connecting
  to Windows 365 Cloud PCs and AVD environments.

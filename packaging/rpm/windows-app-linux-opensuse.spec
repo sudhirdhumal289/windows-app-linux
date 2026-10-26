@@ -4,10 +4,11 @@ Release:        1%{?dist}
 Summary:        Microsoft Windows 365 Cloud PC and Azure Virtual Desktop client for Linux
 License:        Apache-2.0
 
-Requires:       gtk4 >= 4.12
-Requires:       libwebkit2gtk-6_0-4 >= 2.40
+Requires:       gtk4 >= 4.14
+Requires:       libadwaita-1-0 >= 1.5
+Requires:       libwebkit2gtk-6_0-4 >= 2.42
 Requires:       libsoup-3_0-0 >= 3.0
-Recommends:     freerdp >= 3.0
+Requires:       freerdp >= 3.0
 
 %description
 Native Linux client written in Rust using GTK 4 and WebKitGTK 6 for connecting
@@ -21,6 +22,10 @@ mkdir -p %{buildroot}%{_datadir}/icons/hicolor/scalable/apps
 
 install -m 755 %{_sourcedir}/windows-app-linux %{buildroot}%{_bindir}/windows-app-linux
 install -m 644 %{_sourcedir}/com.microsoft.windowsapp.linux.desktop %{buildroot}%{_datadir}/applications/com.microsoft.windowsapp.linux.desktop
+%{_datadir}/gnome-shell/search-providers/com.microsoft.windowsapp.linux.search-provider.ini
+%{_datadir}/dbus-1/services/com.microsoft.windowsapp.linux.service
+install -Dm 644 %{_sourcedir}/com.microsoft.windowsapp.linux.search-provider.ini %{buildroot}%{_datadir}/gnome-shell/search-providers/com.microsoft.windowsapp.linux.search-provider.ini
+install -Dm 644 %{_sourcedir}/com.microsoft.windowsapp.linux.service %{buildroot}%{_datadir}/dbus-1/services/com.microsoft.windowsapp.linux.service
 install -m 644 %{_sourcedir}/com.microsoft.windowsapp.linux.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/com.microsoft.windowsapp.linux.svg
 
 for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do

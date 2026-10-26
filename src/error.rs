@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-/// Central error type covering network, authentication, and RDP failures.
+/// Central error type covering network, authentication, configuration and session failures.
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("network communication error: {0}")]
@@ -17,11 +17,8 @@ pub enum AppError {
     #[error("token expired or missing")]
     TokenExpired,
 
-    #[error("device code authorization pending")]
-    AuthorizationPending,
-
-    #[error("rdp client execution error: {0}")]
-    RdpLauncher(String),
+    #[error("remote desktop session error: {0}")]
+    Session(String),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
@@ -31,6 +28,10 @@ pub enum AppError {
 
     #[error("configuration error: {0}")]
     Config(String),
+
+    /// A service refused a request; the message is already user-facing.
+    #[error("{0}")]
+    Service(String),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;

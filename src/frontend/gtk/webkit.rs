@@ -1,22 +1,4 @@
-pub mod app_window;
-pub mod connect_dialog;
-pub mod login_dialog;
-pub mod missing_dependency_dialog;
-pub mod pc_card;
-pub mod preferences_dialog;
-pub mod rdp_auth_dialog;
-pub mod session_window;
-pub mod native_rdp_window;
-
-pub use app_window::AppMainWindow;
-pub use connect_dialog::ConnectDialog;
-pub use login_dialog::LoginDialog;
-pub use missing_dependency_dialog::MissingDependencyDialog;
-pub use pc_card::CloudPcCardWidget;
-pub use preferences_dialog::PreferencesDialog;
-pub use rdp_auth_dialog::RdpAuthDialog;
-pub use session_window::SessionWindow;
-pub use native_rdp_window::NativeRdpWindow;
+//! Shared WebKit network session so every sign-in web view uses one persistent cookie jar.
 
 use crate::config::AppConfig;
 use gtk4::gio;
@@ -40,7 +22,7 @@ pub fn persist_session_cookies() {
         return;
     }
 
-    let session = get_shared_network_session();
+    let session = shared_network_session();
     if let Some(cm) = session.cookie_manager() {
         let cm_clone = cm.clone();
         CookieManager::all_cookies(&cm, None::<&gio::Cancellable>, move |res| {
@@ -71,7 +53,7 @@ pub fn persist_session_cookies() {
 /// Returns a shared, persistent WebKit NetworkSession with cookies and storage saved to disk.
 /// Implements a process-wide singleton so all login and RDP authentication sessions share
 /// the exact same in-memory and on-disk cookie jar.
-pub fn get_shared_network_session() -> NetworkSession {
+pub fn shared_network_session() -> NetworkSession {
     SHARED_SESSION.with(|cell| {
         let mut opt = cell.borrow_mut();
         if let Some(ref session) = *opt {
