@@ -9,6 +9,8 @@ macOS".
 
 Every bundled library is referenced as @executable_path/../Frameworks/<name> and all
 LC_RPATH entries are dropped, so nothing outside the bundle and the OS is loaded.
+OpenSSL's provider modules (ossl-modules, loaded at run time) are copied to
+Frameworks/ossl-modules; the app points OPENSSL_MODULES there.
 Rewriting load commands invalidates code signatures: sign the dylibs and the bundle
 afterwards.
 
@@ -79,6 +81,30 @@ def resolve(name, loader_dir, rpath_dirs, exe_dir):
     return os.path.realpath(candidate) if os.path.exists(candidate) else None
 
 
+def openssl_modules(by_name, frameworks):
+    """Copies the provider modules of the bundled libcrypto; returns them for patching."""
+    queue = []
+    for name, source in sorted(by_name.items()):
+        if not re.fullmatch(r"libcrypto\.[\d.]+\.dylib", name):
+            continue
+        modules = os.path.join(os.path.dirname(source), "ossl-modules")
+        if not os.path.isdir(modules):
+            print(f"warning: {modules} not found; OpenSSL providers are not bundled")
+            continue
+        dest_dir = os.path.join(frameworks, "ossl-modules")
+        os.makedirs(dest_dir, exist_ok=True)
+        for module in sorted(os.listdir(modules)):
+            if not module.endswith(".dylib"):
+                continue
+            src = os.path.realpath(os.path.join(modules, module))
+            dest = os.path.join(dest_dir, module)
+            shutil.copyfile(src, dest)
+            os.chmod(dest, 0o755)
+            print(f"bundled ossl-modules/{module} <- {src}")
+            queue.append((dest, os.path.dirname(src)))
+    return queue
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -95,8 +121,13 @@ def main():
     # (file to patch, directory it was loaded from originally)
     queue = [(exe, exe_dir)]
     patched = []
+    plugins_added = False
 
-    while queue:
+    while queue or not plugins_added:
+        if not queue:
+            plugins_added = True
+            queue += openssl_modules(by_name, frameworks)
+            continue
         target, origin_dir = queue.pop()
         ident, deps, rpaths = load_commands(target)
         # dyld searches the loading image's rpaths first, then the executable's.
@@ -125,7 +156,7 @@ def main():
                 queue.append((dest, os.path.dirname(source)))
             args += ["-change", dep, BUNDLED_PREFIX + name]
         if ident is not None:
-            args += ["-id", BUNDLED_PREFIX + os.path.basename(target)]
+            args += ["-id", BUNDLED_PREFIX + os.path.relpath(target, frameworks)]
         if args:
             run(INSTALL_NAME_TOOL, *args, target)
         # install_name_tool removes one LC_RPATH per path at a time; repeat for duplicates.

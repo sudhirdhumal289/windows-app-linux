@@ -47,6 +47,8 @@ pub fn run() -> ExitCode {
         log::error!("The app must start on the main thread");
         return ExitCode::FAILURE;
     };
+    // Before any thread exists: the environment is not thread-safe to modify.
+    configure_bundled_openssl();
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -72,6 +74,42 @@ pub fn run() -> ExitCode {
     // `applicationWillTerminate:` has disconnected the sessions.
     app.run();
     ExitCode::SUCCESS
+}
+
+/// macOS ships its trusted roots in this PEM bundle.
+const SYSTEM_CA_FILE: &str = "/etc/ssl/cert.pem";
+
+/// Points the OpenSSL copy bundled in `Contents/Frameworks` away from the Homebrew paths
+/// it was built with, which do not exist on most Macs. Without CA certificates the HTTPS
+/// requests FreeRDP makes itself (Azure Virtual Desktop gateway discovery) fail, and
+/// without the legacy provider there is no MD4 for NTLM.
+fn configure_bundled_openssl() {
+    let Some(frameworks) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.parent()?.join("Frameworks")))
+        .filter(|dir| dir.is_dir())
+    else {
+        return;
+    };
+    for (name, value) in bundled_openssl_env(&frameworks, |name| std::env::var_os(name).is_some()) {
+        std::env::set_var(name, value);
+    }
+}
+
+fn bundled_openssl_env(
+    frameworks: &std::path::Path,
+    is_set: impl Fn(&str) -> bool,
+) -> Vec<(&'static str, PathBuf)> {
+    let mut env = Vec::new();
+    let modules = frameworks.join("ossl-modules");
+    if !is_set("OPENSSL_MODULES") && modules.is_dir() {
+        env.push(("OPENSSL_MODULES", modules));
+    }
+    let ca_file = std::path::Path::new(SYSTEM_CA_FILE);
+    if !is_set("SSL_CERT_FILE") && !is_set("SSL_CERT_DIR") && ca_file.is_file() {
+        env.push(("SSL_CERT_FILE", ca_file.to_path_buf()));
+    }
+    env
 }
 
 /// `--connect TARGET` (`-c`, `--connect=TARGET`) and `.rdp` files.
@@ -101,4 +139,30 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<LaunchRequest, Strin
         }
     }
     Ok(request)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_openssl_env_respects_existing_settings() {
+        let frameworks = std::env::temp_dir().join(format!("wal-fw-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(frameworks.join("ossl-modules")).unwrap();
+
+        let env = bundled_openssl_env(&frameworks, |_| false);
+        assert!(env.contains(&("OPENSSL_MODULES", frameworks.join("ossl-modules"))));
+        assert_eq!(
+            env.iter().any(|(name, _)| *name == "SSL_CERT_FILE"),
+            std::path::Path::new(SYSTEM_CA_FILE).is_file()
+        );
+        assert!(bundled_openssl_env(&frameworks, |_| true).is_empty());
+        assert!(
+            bundled_openssl_env(&frameworks, |name| name == "SSL_CERT_DIR")
+                .iter()
+                .all(|(name, _)| *name != "SSL_CERT_FILE")
+        );
+
+        std::fs::remove_dir_all(&frameworks).unwrap();
+    }
 }

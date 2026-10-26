@@ -214,17 +214,32 @@ the app's `Contents/Frameworks` (via `scripts/bundle-macos-dylibs.py`) and re-si
 so the packaged app runs on Macs without Homebrew.
 
 #### Windows
-Install Rust with the MSVC toolchain, [vcpkg](https://vcpkg.io) and pkgconf, then FreeRDP:
+Install Rust with the MSVC toolchain (it asks for the Visual Studio C++ build tools).
+Nothing else needs to be installed or configured (git only for the vcpkg fallback below):
 ```powershell
-vcpkg install "freerdp[client,urbdrc]:x64-windows" pkgconf:x64-windows
-$env:PKG_CONFIG = "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf\pkgconf.exe"
-$env:PKG_CONFIG_PATH = "$env:VCPKG_ROOT\installed\x64-windows\lib\pkgconfig"
-$env:PATH += ";$env:VCPKG_ROOT\installed\x64-windows\bin"   # FreeRDP DLLs for cargo run/test
+cargo run --release --no-default-features --features winui
+.\scripts\package-windows.ps1     # portable folder + .zip in target\packages
 ```
-The `client` feature is required (vcpkg's `freerdp` port builds no client library by default);
-`urbdrc` adds USB redirection, which the app turns off when FreeRDP lacks it.
-The app needs the [Windows App SDK runtime](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)
-and the WebView2 runtime (preinstalled on Windows 11).
+On the first build, `build.rs`:
+- downloads a prebuilt FreeRDP SDK (pinned with its SHA-256 in
+  `packaging/windows/freerdp-sdk.txt`) into `%LOCALAPPDATA%\windows-app-linux\freerdp-sdk`.
+  The SDK is built from `vcpkg.json` by the `FreeRDP SDK` workflow
+  (`.github/workflows/freerdp-sdk.yml`), which publishes it as a release and updates the pin;
+- if no SDK is pinned for the target, installs `vcpkg.json` with vcpkg instead. It uses the
+  vcpkg in `VCPKG_ROOT` if there is one, otherwise it clones vcpkg into
+  `%LOCALAPPDATA%\windows-app-linux\vcpkg`. Compiling FreeRDP and OpenSSL takes
+  15–30 minutes, once;
+- downloads the Windows App SDK runtime from NuGet;
+- copies FreeRDP and the Windows App SDK runtime next to the executable, so `cargo run`
+  and `cargo test` work without `PATH` changes.
+
+To use another FreeRDP build (for example MSYS2), set `PKG_CONFIG_PATH`. Set
+`WINDOWS_APP_NO_PREBUILT=1` to compile FreeRDP with vcpkg instead of downloading it, or
+`WINDOWS_APP_NO_VCPKG=1` to stop the automatic vcpkg install.
+
+The app is self-contained: users install neither the Windows App SDK nor the Visual C++
+runtime. Only WebView2 is needed for sign-in; it is part of Windows 11 and current
+Windows 10.
 
 ---
 
@@ -326,7 +341,7 @@ When packages are installed, the respective package managers resolve and install
 | **openSUSE** | `gtk4 >= 4.14`, `libadwaita-1-0 >= 1.5`, `libwebkit2gtk-6_0-4 >= 2.42`, `libsoup-3_0-0 >= 3.0`, `freerdp >= 3.0` |
 | **Arch Linux / Manjaro** | `gtk4`, `libadwaita`, `webkitgtk-6.0`, `libsoup3`, `freerdp` |
 | **macOS** | None (FreeRDP and its dependencies are bundled in `Contents/Frameworks`) |
-| **Windows** | Windows App SDK runtime, WebView2 runtime (FreeRDP DLLs are bundled) |
+| **Windows** | WebView2 runtime (part of Windows 11). FreeRDP, the Windows App SDK and the Visual C++ runtime are bundled |
 
 ### 3. Installing Generated Packages
 
@@ -355,6 +370,12 @@ Open `windows-app-macos.dmg` and drag **Windows App** to Applications. CI builds
 ad-hoc signed, not notarized, so macOS blocks the first launch of a downloaded copy: allow
 it under **System Settings → Privacy & Security → Open Anyway**, or run
 `xattr -dr com.apple.quarantine "/Applications/Windows App.app"`.
+
+FreeRDP and its libraries, including OpenSSL and its provider modules, are bundled in the
+app. FreeRDP's own HTTPS requests use the macOS root certificates in `/etc/ssl/cert.pem`.
+If a session fails, run
+`"/Applications/Windows App.app/Contents/MacOS/windows-app-linux"` from Terminal to see
+FreeRDP's log.
 
 ---
 

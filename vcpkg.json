@@ -1,0 +1,13 @@
+{
+  "$comment": "FreeRDP for Windows builds. build.rs runs `vcpkg install` with this manifest on the first build; the libraries land in vcpkg_installed/.",
+  "name": "windows-app-linux",
+  "version-string": "0.1.0",
+  "dependencies": [
+    {
+      "name": "freerdp",
+      "default-features": false,
+      "features": ["client", "urbdrc"]
+    },
+    "pkgconf"
+  ]
+}

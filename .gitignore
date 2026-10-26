@@ -2,4 +2,5 @@ target/
 *.msix
 .cargo/
 freerdp-3.32/
+vcpkg_installed/
 ui/

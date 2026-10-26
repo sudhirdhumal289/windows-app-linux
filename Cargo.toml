@@ -134,3 +134,7 @@ assets = [
 [build-dependencies]
 cc = "1.0"
 pkg-config = "0.3"
+
+# Bundles the Windows App SDK runtime with WinUI builds, so users install nothing.
+[target.'cfg(windows)'.build-dependencies]
+windows-reactor-setup = "0.100"

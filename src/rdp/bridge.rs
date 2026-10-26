@@ -1570,6 +1570,31 @@ mod tests {
     }
 
     #[test]
+    fn failures_without_error_code_report_the_logged_cause() {
+        let _guard = lock(&TEST_LOCK);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let tx = Mutex::new(tx);
+        let sink: EventSink = Arc::new(move |event| {
+            if let BridgeEvent::Status(SessionStatus::Failed(message)) = event {
+                let _ = lock(&tx).send(message);
+            }
+        });
+        // An ARM gateway without load-balance info fails before any network access and
+        // leaves FreeRDP's error code at "Success".
+        let args = args(&[
+            "freerdp",
+            "/v:127.0.0.1",
+            "/gateway:type:arm,url:wss://127.0.0.1:1",
+        ]);
+        let bridge = NativeRdpBridge::new(&args, BridgeOptions::default(), sink).unwrap();
+        bridge.start().unwrap();
+        let message = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+        assert_ne!(message, "Success");
+        assert!(!message.is_empty());
+        eprintln!("failure message: {message}");
+    }
+
+    #[test]
     fn probes_command_line_options() {
         // SAFETY: NUL-terminated literals.
         unsafe {

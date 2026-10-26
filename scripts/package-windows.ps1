@@ -1,39 +1,56 @@
 # Builds the WinUI 3 frontend and stages a portable folder plus a .zip in target\packages.
 #
-# Requirements: Rust (MSVC toolchain), FreeRDP 3 from vcpkg
-# (`vcpkg install "freerdp[client,urbdrc]:x64-windows" pkgconf:x64-windows`) with PKG_CONFIG set, and the Windows App SDK runtime installed on the machine that runs the
-# app (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads).
+# The folder is self-contained: FreeRDP, the Windows App SDK runtime and the Visual C++
+# runtime ship next to WindowsApp.exe, so users install nothing (WebView2, used for
+# sign-in, is part of Windows 11 and current Windows 10).
 #
-# Usage: .\scripts\package-windows.ps1 [-VcpkgRoot C:\vcpkg]
-
-param(
-    [string]$VcpkgRoot = $env:VCPKG_ROOT,
-    [string]$Triplet = "x64-windows"
-)
+# Requirements: Rust (MSVC toolchain) with the Visual Studio C++ build tools, and git.
+# The first build fetches vcpkg and compiles FreeRDP from vcpkg.json (see build.rs).
+#
+# Usage: .\scripts\package-windows.ps1
 
 $ErrorActionPreference = "Stop"
 $Root = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $Root
 
-if (-not $VcpkgRoot) {
-    throw "Set VCPKG_ROOT or pass -VcpkgRoot (FreeRDP is taken from vcpkg)."
-}
-$Installed = Join-Path $VcpkgRoot "installed\$Triplet"
-$env:PKG_CONFIG_PATH = Join-Path $Installed "lib\pkgconfig"
-
 Write-Host "==> Building release binary (WinUI frontend)..."
 cargo build --release --no-default-features --features winui
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 
+$Release = Join-Path $Root "target\release"
 $Stage = Join-Path $Root "target\windows-package\Windows App"
 $Output = Join-Path $Root "target\packages"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $Stage, $Output | Out-Null
 
-Copy-Item "target\release\windows-app-linux.exe" (Join-Path $Stage "WindowsApp.exe")
+Copy-Item (Join-Path $Release "windows-app-linux.exe") (Join-Path $Stage "WindowsApp.exe")
 Copy-Item "packaging\windows\AppIcon.ico" $Stage
-# Windows has no rpath: FreeRDP and its dependencies sit next to the executable.
-Copy-Item (Join-Path $Installed "bin\*.dll") $Stage
+# build.rs put the FreeRDP DLLs and the Windows App SDK runtime (DLLs, .pri resources,
+# XAML and language folders) next to the executable; take all of it, minus cargo's dirs.
+Get-ChildItem $Release -File | Where-Object { $_.Extension -in ".dll", ".pri" } |
+    Copy-Item -Destination $Stage
+Get-ChildItem $Release -Directory |
+    Where-Object { $_.Name -notin "build", "deps", "examples", "incremental", ".fingerprint" } |
+    Copy-Item -Destination $Stage -Recurse
+
+# Visual C++ runtime (app-local deployment), for PCs without the redistributable.
+$VsWhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+if (Test-Path $VsWhere) {
+    $Vs = & $VsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    $Crt = Get-ChildItem (Join-Path $Vs "VC\Redist\MSVC\*\x64\Microsoft.VC14*.CRT") -Directory -ErrorAction SilentlyContinue |
+        Sort-Object FullName | Select-Object -Last 1
+    if ($Crt) {
+        Copy-Item (Join-Path $Crt.FullName "*.dll") $Stage
+    } else {
+        Write-Warning "Visual C++ runtime DLLs not found; users may need the VC++ redistributable."
+    }
+}
+
+foreach ($Required in "Microsoft.WindowsAppRuntime.dll", "freerdp3*.dll", "freerdp-client3*.dll", "winpr3*.dll") {
+    if (-not (Test-Path (Join-Path $Stage $Required))) {
+        throw "$Required is missing from the package; it would not run on a clean PC."
+    }
+}
 
 $Zip = Join-Path $Output "windows-app-windows-x64.zip"
 Remove-Item -Force $Zip -ErrorAction SilentlyContinue

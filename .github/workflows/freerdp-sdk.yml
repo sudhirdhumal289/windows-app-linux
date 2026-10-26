@@ -1,0 +1,107 @@
+# Builds FreeRDP for Windows from vcpkg.json once and publishes it as a release asset (a
+# zipped vcpkg install tree: headers, import libraries, DLLs, pkg-config files and pkgconf).
+# build.rs downloads it on the first Windows build instead of compiling FreeRDP and OpenSSL
+# (15-30 minutes). The pin in packaging/windows/freerdp-sdk.txt is updated automatically;
+# if the push is rejected (branch protection), commit the line shown in the job summary.
+name: FreeRDP SDK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [vcpkg.json, .github/workflows/freerdp-sdk.yml]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: freerdp-sdk
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: FreeRDP SDK (${{ matrix.triplet }})
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        triplet: [x64-windows]
+    steps:
+      - uses: actions/checkout@v4
+      # Shared with the Build workflow, so the SDK is usually assembled from cached packages.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-cache
+          key: vcpkg-${{ matrix.triplet }}-freerdp-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-${{ matrix.triplet }}-freerdp-
+      - name: Build FreeRDP (vcpkg.json)
+        shell: pwsh
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
+        run: |
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install --triplet=${{ matrix.triplet }} --x-install-root=vcpkg_installed
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package the SDK
+        id: sdk
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $triplet = '${{ matrix.triplet }}'
+          $src = "vcpkg_installed\$triplet"
+          $env:PKG_CONFIG_PATH = "$src\lib\pkgconfig"
+          $version = (& "$src\tools\pkgconf\pkgconf.exe" --modversion freerdp3).Trim()
+          if (-not $version) { throw 'freerdp3.pc not found' }
+          # Release libraries only: Rust links the release CRT in every profile.
+          $sdk = 'sdk'
+          New-Item -ItemType Directory -Force $sdk | Out-Null
+          foreach ($dir in 'include', 'lib', 'bin', 'share') {
+            Copy-Item -Recurse "$src\$dir" "$sdk\$dir"
+          }
+          New-Item -ItemType Directory -Force "$sdk\tools" | Out-Null
+          Copy-Item -Recurse "$src\tools\pkgconf" "$sdk\tools\pkgconf"
+          $zip = "freerdp-sdk-$triplet.zip"
+          Push-Location $sdk
+          7z a -tzip -mx=9 "..\$zip" * | Out-Null
+          Pop-Location
+          if ($LASTEXITCODE -ne 0) { throw '7z failed' }
+          $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+          "sha256=$sha" >> $env:GITHUB_OUTPUT
+          "tag=freerdp-sdk-$version-${{ github.run_number }}" >> $env:GITHUB_OUTPUT
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ steps.sdk.outputs.tag }}'
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --target $env:GITHUB_SHA --latest=false `
+              --title "FreeRDP ${{ steps.sdk.outputs.version }} SDK for Windows" `
+              --notes "Prebuilt FreeRDP (vcpkg.json) used by build.rs on Windows. Licences are in share/*/copyright."
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          gh release upload $tag '${{ steps.sdk.outputs.zip }}' --clobber
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Pin the SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $triplet = '${{ matrix.triplet }}'
+          $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/${{ steps.sdk.outputs.tag }}/${{ steps.sdk.outputs.zip }}"
+          $line = "$triplet $url ${{ steps.sdk.outputs.sha256 }}"
+          "Pin for ``packaging/windows/freerdp-sdk.txt``:`n`n    $line" >> $env:GITHUB_STEP_SUMMARY
+          $pin = 'packaging/windows/freerdp-sdk.txt'
+          $kept = Get-Content $pin | Where-Object { $_ -notmatch "^$([regex]::Escape($triplet))\s" }
+          Set-Content $pin -Value (@($kept) + $line) -Encoding utf8NoBOM
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add $pin
+          git commit -m "Pin prebuilt FreeRDP SDK ${{ steps.sdk.outputs.version }} ($triplet)"
+          git pull --rebase origin $env:GITHUB_REF_NAME
+          if ($LASTEXITCODE -eq 0) { git push origin "HEAD:$env:GITHUB_REF_NAME" }
+          if ($LASTEXITCODE -ne 0) {
+            "`nThe pin could not be pushed; commit the line above." >> $env:GITHUB_STEP_SUMMARY
+            exit 1
+          }

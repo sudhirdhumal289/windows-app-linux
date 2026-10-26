@@ -46,27 +46,32 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # With a prebuilt FreeRDP SDK pinned (see freerdp-sdk.yml), build.rs downloads it and
+      # vcpkg is not needed.
+      - name: Check for a prebuilt FreeRDP SDK
+        id: pin
+        shell: pwsh
+        run: |
+          $pinned = Select-String -Path packaging/windows/freerdp-sdk.txt -Pattern '^x64-windows\s' -Quiet
+          "pinned=$(if ($pinned) { 'true' } else { 'false' })" >> $env:GITHUB_OUTPUT
       # vcpkg binary cache: FreeRDP and OpenSSL take ~15 minutes to build from source.
-      - uses: actions/cache@v4
+      - if: steps.pin.outputs.pinned != 'true'
+        uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}\vcpkg-cache
-          key: vcpkg-x64-windows-freerdp-client-${{ hashFiles('.github/workflows/build.yml') }}
-          restore-keys: vcpkg-x64-windows-freerdp-client-
-      - name: Install FreeRDP (vcpkg)
+          key: vcpkg-x64-windows-freerdp-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-x64-windows-freerdp-
+      # build.rs would install vcpkg.json itself; a separate step keeps the log readable.
+      # Nothing else is configured: build.rs finds vcpkg_installed\ and copies the DLLs.
+      - name: Install FreeRDP (vcpkg.json)
+        if: steps.pin.outputs.pinned != 'true'
         shell: pwsh
         env:
           VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
         run: |
           New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-          # The freerdp port has no default features; `client` provides freerdp-client3.
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "freerdp[client,urbdrc]:x64-windows" pkgconf:x64-windows
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install --triplet=x64-windows
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
-          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-          "PKG_CONFIG=$installed\tools\pkgconf\pkgconf.exe" >> $env:GITHUB_ENV
-          "PKG_CONFIG_PATH=$installed\lib\pkgconfig" >> $env:GITHUB_ENV
-          # FreeRDP DLLs for the test binaries (Windows has no rpath).
-          "$installed\bin" >> $env:GITHUB_PATH
       - run: cargo clippy --no-default-features --features winui
       - run: cargo test --lib --no-default-features --features winui
       - name: Package (.zip)
@@ -99,6 +104,10 @@ jobs:
       # The bundle must not depend on Homebrew: hide FreeRDP and check the app stays up.
       - name: Smoke test bundle without Homebrew FreeRDP
         run: |
+          # FreeRDP needs OpenSSL's legacy provider (MD4 for NTLM) at run time.
+          if [ ! -f "target/macos-bundle/Windows App.app/Contents/Frameworks/ossl-modules/legacy.dylib" ]; then
+            echo "::warning::OpenSSL legacy provider was not bundled; NTLM sign-in may fail"
+          fi
           mv "$(brew --prefix)/Cellar/freerdp" "$RUNNER_TEMP/freerdp-hidden"
           "target/macos-bundle/Windows App.app/Contents/MacOS/windows-app-linux" &
           pid=$!

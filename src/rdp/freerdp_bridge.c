@@ -6,6 +6,7 @@
 #include "freerdp_bridge.h"
 
 #include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -34,6 +35,11 @@
 #endif
 
 #define TAG "com.windowsapp.bridge"
+#if defined(_MSC_VER)
+#define BRIDGE_THREAD_LOCAL __declspec(thread)
+#else
+#define BRIDGE_THREAD_LOCAL _Thread_local
+#endif
 /* Interactive Entra ID sign-in (MFA included) must finish within this time. */
 #define AUTH_TIMEOUT_MS (5 * 60 * 1000)
 /* Unanswered certificate prompts are rejected after this time. */
@@ -176,11 +182,36 @@ static wLog* bridge_log(void) {
     return WLog_Get(TAG);
 }
 
+/* The last error FreeRDP logged on this thread. Several connection failures (gateway
+ * discovery, TLS setup, ...) only log the cause and leave the error code at "Success". */
+static BRIDGE_THREAD_LOCAL char g_last_log_error[256];
+
+static BOOL bridge_log_message(const wLogMessage* msg) {
+    const char* prefix = msg->PrefixString ? msg->PrefixString : "";
+    const char* text = msg->TextString ? msg->TextString : "";
+    (void)fprintf(stderr, "%s%s\n", prefix, text);
+    if (msg->Level >= WLOG_ERROR && text[0] != '\0') {
+        (void)snprintf(g_last_log_error, sizeof(g_last_log_error), "%s", text);
+        size_t len = strlen(g_last_log_error);
+        while (len > 0 && (g_last_log_error[len - 1] == '\n' || g_last_log_error[len - 1] == '\r')) {
+            g_last_log_error[--len] = '\0';
+        }
+    }
+    return TRUE;
+}
+
 static void bridge_init_logging(void) {
-    if (!getenv("WLOG_LEVEL")) {
-        wLog* root = WLog_GetRoot();
-        if (root) {
-            WLog_SetLogLevel(root, WLOG_WARN);
+    wLog* root = WLog_GetRoot();
+    if (root && !getenv("WLOG_LEVEL")) {
+        WLog_SetLogLevel(root, WLOG_WARN);
+    }
+    /* Keep console output, but also remember errors (unless the user picked an appender). */
+    if (root && !getenv("WLOG_APPENDER") && WLog_SetLogAppenderType(root, WLOG_APPENDER_CALLBACK)) {
+        wLogCallbacks callbacks = { 0 };
+        callbacks.message = bridge_log_message;
+        wLogAppender* appender = WLog_GetLogAppender(root);
+        if (!appender || !WLog_ConfigureAppender(appender, "callbacks", &callbacks)) {
+            WLog_SetLogAppenderType(root, WLOG_APPENDER_CONSOLE);
         }
     }
     if (getenv("RDP_DEBUG")) {
@@ -667,14 +698,24 @@ static DWORD WINAPI bridge_client_thread(LPVOID arg) {
 
     bridge_status(bctx, RDP_BRIDGE_STATUS_PROGRESS, "Connecting...");
     bctx->failure_hint = NULL;
+    g_last_log_error[0] = '\0';
     if (!freerdp_connect(instance)) {
         UINT32 error = freerdp_get_last_error(context);
         const char* reason = freerdp_get_last_error_string(error);
-        WLog_Print(bridge_log(), WLOG_ERROR, "Connection failed: 0x%08X %s", error,
-                   reason ? reason : "");
         if (bctx->failure_hint) {
             reason = bctx->failure_hint;
+        } else if (error == FREERDP_ERROR_SUCCESS) {
+            /* No error code: the logged cause beats "Success". */
+            static BRIDGE_THREAD_LOCAL char detail[300];
+            if (g_last_log_error[0] != '\0') {
+                (void)snprintf(detail, sizeof(detail), "Connection failed: %s", g_last_log_error);
+                reason = detail;
+            } else {
+                reason = "Connection failed";
+            }
         }
+        WLog_Print(bridge_log(), WLOG_ERROR, "Connection failed: 0x%08X %s", error,
+                   reason ? reason : "");
         bridge_status(bctx, RDP_BRIDGE_STATUS_FAILED, reason ? reason : "Connection failed");
         return 1;
     }
@@ -1169,10 +1210,16 @@ static void bridge_client_free(freerdp* instance, rdpContext* context) {
     }
 }
 
-/* FreeRDP context creation/destruction touches process-global state (channel addin
- * registry, WLog), so it is serialised. */
+/* FreeRDP context creation/destruction and command-line parsing touch process-global
+ * state (channel addin registry, WLog), so they are serialised. */
 static BridgeMutex g_context_lock = BRIDGE_MUTEX_INITIALIZER;
 static BridgeOnce g_logging_once = BRIDGE_ONCE_INITIALIZER;
+
+/* Replacing the root appender frees the old one, so it must happen before any thread can
+ * log: every entry point that reaches FreeRDP calls this first. */
+static void bridge_ensure_logging(void) {
+    bridge_once(&g_logging_once, bridge_init_logging);
+}
 
 const char* freerdp_bridge_version(void) {
     return freerdp_get_version_string();
@@ -1184,8 +1231,13 @@ const char* freerdp_bridge_build_config(void) {
 
 bool freerdp_bridge_accepts_option(const char* option) {
     if (!option) return false;
+    bridge_ensure_logging();
+    bridge_mutex_lock(&g_context_lock);
     rdpSettings* settings = freerdp_settings_new(0);
-    if (!settings) return false;
+    if (!settings) {
+        bridge_mutex_unlock(&g_context_lock);
+        return false;
+    }
     char program[] = "freerdp";
     char server[] = "/v:localhost";
     char* arg = _strdup(option);
@@ -1196,6 +1248,7 @@ bool freerdp_bridge_accepts_option(const char* option) {
     }
     free(arg);
     freerdp_settings_free(settings);
+    bridge_mutex_unlock(&g_context_lock);
     return ok;
 }
 
@@ -1259,7 +1312,7 @@ RdpBridgeContext* freerdp_bridge_create(const char* const* args, int argc,
                                         const char* gateway_token,
                                         const RdpBridgeCallbacks* callbacks) {
     if (!args || argc < 1 || !callbacks) return NULL;
-    bridge_once(&g_logging_once, bridge_init_logging);
+    bridge_ensure_logging();
 
     RdpBridgeContext* bridge = (RdpBridgeContext*)calloc(1, sizeof(RdpBridgeContext));
     if (!bridge) return NULL;
@@ -1287,8 +1340,13 @@ RdpBridgeContext* freerdp_bridge_create(const char* const* args, int argc,
     if (gateway_token && gateway_token[0]) {
         bctx->gateway_token = _strdup(gateway_token);
     }
-    if ((gateway_token && gateway_token[0] && !bctx->gateway_token) ||
-        !bridge_parse_args(ctx, args, argc)) {
+    BOOL parsed = FALSE;
+    if (!gateway_token || !gateway_token[0] || bctx->gateway_token) {
+        bridge_mutex_lock(&g_context_lock);
+        parsed = bridge_parse_args(ctx, args, argc);
+        bridge_mutex_unlock(&g_context_lock);
+    }
+    if (!parsed) {
         freerdp_bridge_free(bridge);
         return NULL;
     }

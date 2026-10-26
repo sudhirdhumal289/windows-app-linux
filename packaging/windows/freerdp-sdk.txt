@@ -1,0 +1,5 @@
+# Prebuilt FreeRDP SDKs that build.rs downloads on Windows instead of compiling FreeRDP with
+# vcpkg. They are built from vcpkg.json by .github/workflows/freerdp-sdk.yml, which also
+# updates this file. A triplet without an entry here falls back to vcpkg.
+#
+# <vcpkg triplet> <download URL> <sha256 of the zip>
