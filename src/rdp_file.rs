@@ -286,7 +286,13 @@ mod tests {
         for unit in "full address:s:nobom\r\n".encode_utf16() {
             no_bom.extend(unit.to_le_bytes());
         }
-        assert_eq!(import(&decode(&no_bom).unwrap(), "").unwrap().connection.address, "nobom");
+        assert_eq!(
+            import(&decode(&no_bom).unwrap(), "")
+                .unwrap()
+                .connection
+                .address,
+            "nobom"
+        );
         assert_eq!(
             import("username:s:x", "n").unwrap_err(),
             ImportError::MissingAddress

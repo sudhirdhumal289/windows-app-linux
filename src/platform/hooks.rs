@@ -64,7 +64,7 @@ pub fn run_pre_connect(
 ) -> Result<(), HookError> {
     let mut child = shell(command, context, "pre-connect")
         .spawn()
-        .map_err(HookError::Spawn)? ;
+        .map_err(HookError::Spawn)?;
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait().map_err(HookError::Spawn)? {

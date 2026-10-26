@@ -67,7 +67,11 @@ fn exec_path() -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("WindowsApp.exe"))
 }
 
-fn write_launcher_script(path: &std::path::Path, target: &LaunchTarget, title: &str) -> io::Result<()> {
+fn write_launcher_script(
+    path: &std::path::Path,
+    target: &LaunchTarget,
+    title: &str,
+) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }

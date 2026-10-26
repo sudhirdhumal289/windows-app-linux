@@ -39,7 +39,10 @@ fn launch_agents_dir() -> io::Result<PathBuf> {
 }
 
 fn autostart_plist_path(target: &LaunchTarget) -> io::Result<PathBuf> {
-    Ok(launch_agents_dir()?.join(format!("com.microsoft.windowsapp.connection-{}.plist", target.file_key())))
+    Ok(launch_agents_dir()?.join(format!(
+        "com.microsoft.windowsapp.connection-{}.plist",
+        target.file_key()
+    )))
 }
 
 fn exec_path() -> PathBuf {
@@ -78,7 +81,10 @@ fn write_plist(path: &std::path::Path, target: &LaunchTarget) -> io::Result<()> 
 }
 
 pub fn install_launcher(_entry: &LaunchEntry) -> io::Result<PathBuf> {
-    Err(io::Error::new(io::ErrorKind::Unsupported, "macOS apps live in /Applications"))
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "macOS apps live in /Applications",
+    ))
 }
 
 pub fn remove_launcher(_target: &LaunchTarget) -> io::Result<()> {

@@ -663,12 +663,60 @@ pub fn sync_rdp_file_content(content: &str, opts: &SessionOptions) -> String {
 
     // Overrides / injections to guarantee alignment with SessionOptions:
     let desired: [(&str, char, String); 6] = [
-        ("camerastoredirect", 's', if opts.camera { "*".to_string() } else { String::new() }),
-        ("audiocapturemode", 'i', if opts.microphone { "1".to_string() } else { "0".to_string() }),
-        ("audiomode", 'i', if opts.audio { "0".to_string() } else { "1".to_string() }),
-        ("redirectclipboard", 'i', if opts.clipboard { "1".to_string() } else { "0".to_string() }),
-        ("redirectprinters", 'i', if opts.printers { "1".to_string() } else { "0".to_string() }),
-        ("redirectsmartcards", 'i', if opts.smartcard { "1".to_string() } else { "0".to_string() }),
+        (
+            "camerastoredirect",
+            's',
+            if opts.camera {
+                "*".to_string()
+            } else {
+                String::new()
+            },
+        ),
+        (
+            "audiocapturemode",
+            'i',
+            if opts.microphone {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            },
+        ),
+        (
+            "audiomode",
+            'i',
+            if opts.audio {
+                "0".to_string()
+            } else {
+                "1".to_string()
+            },
+        ),
+        (
+            "redirectclipboard",
+            'i',
+            if opts.clipboard {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            },
+        ),
+        (
+            "redirectprinters",
+            'i',
+            if opts.printers {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            },
+        ),
+        (
+            "redirectsmartcards",
+            'i',
+            if opts.smartcard {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            },
+        ),
     ];
 
     for (target_key, target_ty, target_val) in desired {

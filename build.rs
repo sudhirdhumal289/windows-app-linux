@@ -73,8 +73,8 @@ fn main() {
     let mut rpaths: Vec<PathBuf> = libs
         .iter()
         .flat_map(|lib| &lib.link_paths)
+        .filter(|&p| !is_system_lib_dir(p))
         .cloned()
-        .filter(|p| !is_system_lib_dir(p))
         .collect();
     rpaths.sort();
     rpaths.dedup();
@@ -134,8 +134,7 @@ fn emit_link_flags(libs: &[pkg_config::Library]) {
             println!("cargo:rustc-link-lib={name}");
         }
         for flag in &lib.ld_args {
-            let args: Vec<&str> = flag.split_whitespace().collect();
-            println!("cargo:rustc-link-arg=-Wl,{}", args.join(","));
+            println!("cargo:rustc-link-arg=-Wl,{}", flag.join(","));
         }
     }
 }
@@ -418,7 +417,8 @@ fn copy_windows_dlls(libs: &[pkg_config::Library]) {
                     let _ = fs::create_dir_all(&target_dir);
                     if let Ok(mod_entries) = fs::read_dir(&path) {
                         for mod_entry in mod_entries.flatten() {
-                            let _ = fs::copy(mod_entry.path(), target_dir.join(mod_entry.file_name()));
+                            let _ =
+                                fs::copy(mod_entry.path(), target_dir.join(mod_entry.file_name()));
                         }
                     }
                 }
@@ -426,7 +426,6 @@ fn copy_windows_dlls(libs: &[pkg_config::Library]) {
         }
     }
 }
-
 
 /// Copies non-system shared libraries next to executables and test binaries so that
 /// origin-relative RPATH ($ORIGIN) resolves bundled FreeRDP without requiring LD_LIBRARY_PATH.
