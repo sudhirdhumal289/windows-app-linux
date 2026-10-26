@@ -25,7 +25,7 @@ pub enum ImportError {
     Invalid(#[from] AddressError),
 }
 
-/// Decodes UTF-16 (with byte-order mark, as written by Windows) or UTF-8 text.
+/// Decodes UTF-16 (with or without byte-order mark) or UTF-8 text.
 pub fn decode(bytes: &[u8]) -> Result<String, ImportError> {
     let utf16 = |bytes: &[u8], le: bool| {
         let units: Vec<u16> = bytes
@@ -48,6 +48,10 @@ pub fn decode(bytes: &[u8]) -> Result<String, ImportError> {
         [0xEF, 0xBB, 0xBF, rest @ ..] => {
             String::from_utf8(rest.to_vec()).map_err(|_| ImportError::NotText)
         }
+        // UTF-16 LE without BOM (common in Windows exports)
+        [b0, 0x00, b2, 0x00, ..] if *b0 != 0 && *b2 != 0 => utf16(bytes, true),
+        // UTF-16 BE without BOM
+        [0x00, b1, 0x00, b3, ..] if *b1 != 0 && *b3 != 0 => utf16(bytes, false),
         _ => String::from_utf8(bytes.to_vec()).map_err(|_| ImportError::NotText),
     }
 }
@@ -278,6 +282,11 @@ mod tests {
         let text = decode(&bytes).unwrap();
         assert_eq!(import(&text, "").unwrap().connection.address, "pc");
         assert_eq!(decode(&[0xC3, 0x28]), Err(ImportError::NotText));
+        let mut no_bom = Vec::new();
+        for unit in "full address:s:nobom\r\n".encode_utf16() {
+            no_bom.extend(unit.to_le_bytes());
+        }
+        assert_eq!(import(&decode(&no_bom).unwrap(), "").unwrap().connection.address, "nobom");
         assert_eq!(
             import("username:s:x", "n").unwrap_err(),
             ImportError::MissingAddress

@@ -48,6 +48,18 @@ pub fn run() -> glib::ExitCode {
     glib::set_prgname(Some(APP_ID));
     glib::set_application_name("Windows App");
 
+    // Stabilize PulseAudio / PipeWire capture buffer latency to prevent buffer underruns (XRUNs)
+    // which cause breaking, choppy, and noisy microphone audio in FreeRDP.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("PULSE_LATENCY_MSEC").is_none() {
+            std::env::set_var("PULSE_LATENCY_MSEC", "60");
+        }
+        if std::env::var_os("PIPEWIRE_LATENCY").is_none() {
+            std::env::set_var("PIPEWIRE_LATENCY", "1024/48000");
+        }
+    }
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

@@ -77,9 +77,27 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<app::Startup, St
     Ok(startup)
 }
 
+/// Points the OpenSSL copy bundled next to the executable to its `ossl-modules` directory
+/// (for the legacy provider needed by FreeRDP for NTLM).
+fn configure_bundled_openssl() {
+    if std::env::var_os("OPENSSL_MODULES").is_none() {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let modules = dir.join("ossl-modules");
+                if modules.is_dir() {
+                    std::env::set_var("OPENSSL_MODULES", modules);
+                }
+            }
+        }
+    }
+}
+
 /// Runs the app until its main window closes.
 #[must_use]
 pub fn run() -> ExitCode {
+    // Before any threads are spawned: environment is not thread-safe to mutate.
+    configure_bundled_openssl();
+
     let startup = match parse_args(std::env::args().skip(1)) {
         Ok(startup) => startup,
         Err(message) => {

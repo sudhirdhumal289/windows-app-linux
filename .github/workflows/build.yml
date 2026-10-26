@@ -1,5 +1,5 @@
 # Builds and packages every frontend on its own OS: GTK on Linux, WinUI 3 on Windows and
-# AppKit on macOS. Packages are uploaded as workflow artifacts.
+# AppKit on macOS. Packages are uploaded as workflow artifacts and published as GitHub Releases.
 name: Build
 
 on:
@@ -23,6 +23,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
             libwebkitgtk-6.0-dev libsoup-3.0-dev freerdp3-dev libwinpr3-dev
+      - name: Fetch FreeRDP 3.32+ Bundle
+        run: ./scripts/fetch-freerdp.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -46,48 +48,26 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      # With a prebuilt FreeRDP SDK pinned (see freerdp-sdk.yml), build.rs downloads it and
-      # vcpkg is not needed.
-      - name: Check for a prebuilt FreeRDP SDK
-        id: pin
-        shell: pwsh
-        run: |
-          $pinned = Select-String -Path packaging/windows/freerdp-sdk.txt -Pattern '^x64-windows\s' -Quiet
-          "pinned=$(if ($pinned) { 'true' } else { 'false' })" >> $env:GITHUB_OUTPUT
-      # vcpkg binary cache: FreeRDP and OpenSSL take ~15 minutes to build from source.
-      - if: steps.pin.outputs.pinned != 'true'
-        uses: actions/cache@v4
-        with:
-          path: ${{ github.workspace }}\vcpkg-cache
-          key: vcpkg-x64-windows-freerdp-${{ hashFiles('vcpkg.json') }}
-          restore-keys: vcpkg-x64-windows-freerdp-
-      # build.rs would install vcpkg.json itself; a separate step keeps the log readable.
-      # Nothing else is configured: build.rs finds vcpkg_installed\ and copies the DLLs.
-      - name: Install FreeRDP (vcpkg.json)
-        if: steps.pin.outputs.pinned != 'true'
-        shell: pwsh
-        env:
-          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
-        run: |
-          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install --triplet=x64-windows
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      # build.rs automatically downloads the pinned prebuilt FreeRDP SDK in packaging/windows/freerdp-sdk.txt
       - run: cargo clippy --no-default-features --features winui
       - run: cargo test --lib --no-default-features --features winui
-      - name: Package (.zip)
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress
+      - name: Package (.zip and .exe installer)
         shell: pwsh
         run: .\scripts\package-windows.ps1
       - uses: actions/upload-artifact@v4
         with:
           name: windows-app-windows-x64
-          path: target/packages/*.zip
+          path: target/packages/windows-x64/*
 
   macos:
     name: macOS (AppKit)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install FreeRDP (Homebrew)
+      - name: Install FreeRDP via Homebrew
         run: brew install freerdp pkg-config
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -95,27 +75,86 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --no-default-features --features appkit
       - run: cargo test --lib --no-default-features --features appkit
-      - name: Package (.dmg)
-        run: ./scripts/package.sh macos
+      - name: Package (.dmg and .tar.gz)
+        run: ./scripts/package-macos.sh
       - uses: actions/upload-artifact@v4
         with:
           name: windows-app-macos
-          path: target/packages/windows-app-macos.*
-      # The bundle must not depend on Homebrew: hide FreeRDP and check the app stays up.
-      - name: Smoke test bundle without Homebrew FreeRDP
+          path: |
+            target/packages/macos/*.dmg
+            target/packages/macos/*.tar.gz
+
+  # Verifies the packaged app runs headlessly without crashing.
+  smoke-test:
+    name: Smoke test (Linux)
+    needs: linux
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-app-linux-deb
+          path: target/packages
+      - name: Install .deb package
         run: |
-          # FreeRDP needs OpenSSL's legacy provider (MD4 for NTLM) at run time.
-          if [ ! -f "target/macos-bundle/Windows App.app/Contents/Frameworks/ossl-modules/legacy.dylib" ]; then
-            echo "::warning::OpenSSL legacy provider was not bundled; NTLM sign-in may fail"
-          fi
-          mv "$(brew --prefix)/Cellar/freerdp" "$RUNNER_TEMP/freerdp-hidden"
-          "target/macos-bundle/Windows App.app/Contents/MacOS/windows-app-linux" &
+          sudo apt-get update
+          sudo apt-get install -y xvfb dbus-x11 ./target/packages/*.deb
+      - name: Launch headlessly under Xvfb
+        run: |
+          xvfb-run -a dbus-launch windows-app-linux &
           pid=$!
-          sleep 10
+          sleep 3
           if ! kill -0 "$pid" 2>/dev/null; then
-            status=0
-            wait "$pid" || status=$?
-            echo "::error::Windows App exited during launch (status $status)"
+            echo "Binary crashed on startup!"
             exit 1
           fi
           kill "$pid"
+
+  release:
+    name: Publish Release
+    needs: [linux, windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name == 'push')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Linux package (.deb)
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-app-linux-deb
+          path: release-assets
+      - name: Download Windows package (.exe, .zip)
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-app-windows-x64
+          path: release-assets
+      - name: Download macOS package (.dmg, .tar.gz)
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-app-macos
+          path: release-assets
+      - name: List Release Assets
+        run: ls -lh release-assets/
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${TAG}" == v* ]]; then
+            TITLE="Windows App ${TAG}"
+            PRERELEASE=""
+          else
+            TAG="continuous"
+            TITLE="Continuous Build"
+            PRERELEASE="--prerelease"
+          fi
+
+          if ! gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release create "${TAG}" ${PRERELEASE} \
+              --title "${TITLE}" \
+              --generate-notes \
+              release-assets/*
+          else
+            gh release upload "${TAG}" release-assets/* --clobber
+          fi

@@ -214,28 +214,19 @@ the app's `Contents/Frameworks` (via `scripts/bundle-macos-dylibs.py`) and re-si
 so the packaged app runs on Macs without Homebrew.
 
 #### Windows
-Install Rust with the MSVC toolchain (it asks for the Visual Studio C++ build tools).
-Nothing else needs to be installed or configured (git only for the vcpkg fallback below):
+Install Rust with the MSVC toolchain (it prompts for the Visual Studio C++ build tools).
+No additional tools or manual library installations are required:
 ```powershell
 cargo run --release --no-default-features --features winui
-.\scripts\package-windows.ps1     # portable folder + .zip in target\packages
+.\scripts\package-windows.ps1     # produces setup installer (.exe) + portable folder (.zip) in target\packages
 ```
 On the first build, `build.rs`:
-- downloads a prebuilt FreeRDP SDK (pinned with its SHA-256 in
-  `packaging/windows/freerdp-sdk.txt`) into `%LOCALAPPDATA%\windows-app-linux\freerdp-sdk`.
-  The SDK is built from `vcpkg.json` by the `FreeRDP SDK` workflow
-  (`.github/workflows/freerdp-sdk.yml`), which publishes it as a release and updates the pin;
-- if no SDK is pinned for the target, installs `vcpkg.json` with vcpkg instead. It uses the
-  vcpkg in `VCPKG_ROOT` if there is one, otherwise it clones vcpkg into
-  `%LOCALAPPDATA%\windows-app-linux\vcpkg`. Compiling FreeRDP and OpenSSL takes
-  15–30 minutes, once;
+- automatically downloads and extracts the pinned prebuilt FreeRDP SDK (verified via SHA-256 in
+  `packaging/windows/freerdp-sdk.txt`) into `%LOCALAPPDATA%\windows-app-linux\freerdp-sdk` using native `curl.exe` and `certutil.exe` in seconds;
 - downloads the Windows App SDK runtime from NuGet;
-- copies FreeRDP and the Windows App SDK runtime next to the executable, so `cargo run`
-  and `cargo test` work without `PATH` changes.
+- bundles FreeRDP DLLs, OpenSSL modules, and the Windows App SDK runtime directly beside the executable, so `cargo run` and `cargo test` work immediately without `PATH` changes.
 
-To use another FreeRDP build (for example MSYS2), set `PKG_CONFIG_PATH`. Set
-`WINDOWS_APP_NO_PREBUILT=1` to compile FreeRDP with vcpkg instead of downloading it, or
-`WINDOWS_APP_NO_VCPKG=1` to stop the automatic vcpkg install.
+To point to a custom FreeRDP build (e.g. from MSYS2 or a manual vcpkg build), set `PKG_CONFIG_PATH`.
 
 The app is self-contained: users install neither the Windows App SDK nor the Visual C++
 runtime. Only WebView2 is needed for sign-in; it is part of Windows 11 and current
@@ -299,6 +290,10 @@ frontends on GitHub's Linux, Windows and macOS runners and uploads the `.deb`, `
 
 ## Distribution Packaging
 
+> [!TIP]
+> **Pre-built Packages**: Ready-to-use binaries for Windows (`windows-app-windows-x64-setup.exe` installer & `.zip`), macOS (`windows-app-macos.dmg` & `.tar.gz`), and Linux (`.deb`) are automatically built and published on [GitHub Releases](https://github.com/sudhirdhumal289/windows-app-linux/releases).
+
+
 Platform packages bundle the executable binary, the `.desktop` launcher, and multi-resolution vector/raster icons directly into system paths (`/usr/bin`, `/usr/share/applications`, `/usr/share/icons/hicolor`).
 
 The app icon (a white monitor with two-way connection arrows on a blue rounded tile, for Cloud PCs and any RDP host) is drawn in `assets/com.microsoft.windowsapp.linux.svg`. After editing it, run `scripts/render-icons.py` to regenerate the PNG sizes in `resources/icons/`.
@@ -328,7 +323,7 @@ Output artifacts are generated in `target/packages/`:
 - **openSUSE**: `target/packages/windows-app-linux-<version>-1.suse*.x86_64.rpm`
 - **Arch / Manjaro**: `target/packages/windows-app-linux-<version>-1-x86_64.pkg.tar.zst`
 - **macOS**: `target/packages/windows-app-macos.dmg` / `windows-app-macos.tar.gz`
-- **Windows** (run `.\scripts\package-windows.ps1` on Windows): `target\packages\windows-app-windows-x64.zip`
+- **Windows** (run `.\scripts\package-windows.ps1` on Windows): `target\packages\windows-app-windows-x64-setup.exe` (installer) and `windows-app-windows-x64.zip` (portable)
 
 ### 2. Runtime Package Dependencies
 
@@ -376,6 +371,15 @@ app. FreeRDP's own HTTPS requests use the macOS root certificates in `/etc/ssl/c
 If a session fails, run
 `"/Applications/Windows App.app/Contents/MacOS/windows-app-linux"` from Terminal to see
 FreeRDP's log.
+
+#### Windows
+Download and double-click `windows-app-windows-x64-setup.exe`.
+The installer is completely self-contained: FreeRDP, the Windows App SDK runtime, and the Visual C++ runtime are all bundled inside the installer.
+- Double-clicking installs the app to `%LOCALAPPDATA%\Programs\Windows App` without requiring administrator privileges or UAC elevation.
+- Automatically creates Start Menu and Desktop shortcuts.
+- Associates `.rdp` files so double-clicking any `.rdp` file opens in Windows App.
+- Registers cleanly in Windows Settings -> Installed Apps for 1-click uninstallation.
+- Alternatively, portable users can extract `windows-app-windows-x64.zip` and run `WindowsApp.exe` directly.
 
 ---
 

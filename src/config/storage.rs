@@ -31,7 +31,8 @@ pub fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         create_private_dir(parent)?;
     }
-    let tmp = path.with_extension("tmp");
+    let unique = uuid::Uuid::new_v4();
+    let tmp = path.with_extension(format!("tmp.{unique}"));
     {
         let mut options = fs::OpenOptions::new();
         options.write(true).create(true).truncate(true);
@@ -44,7 +45,19 @@ pub fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {
         io::Write::write_all(&mut file, contents)?;
         file.sync_all()?;
     }
-    fs::rename(&tmp, path)
+    if let Err(e) = fs::rename(&tmp, path) {
+        // Fallback for Windows where destination might require explicit removal
+        let _ = fs::remove_file(path);
+        if let Err(retry_err) = fs::rename(&tmp, path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(if e.kind() == io::ErrorKind::PermissionDenied {
+                retry_err
+            } else {
+                e
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Removes `path`, treating "already gone" as success.
@@ -78,8 +91,6 @@ mod tests {
                 & 0o777,
             0o700
         );
-        remove_if_exists(&file).unwrap();
-        remove_if_exists(&file).unwrap();
-        fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

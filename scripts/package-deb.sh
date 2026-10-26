@@ -67,6 +67,15 @@ for size in "${SIZES[@]}"; do
     fi
 done
 
+# Bundle FreeRDP 3.32+ if present so users are protected from the distro 3.15 camera regression
+FREERDP_BUNDLE="${ROOT_DIR}/freerdp-3.32"
+if [ -d "${FREERDP_BUNDLE}" ]; then
+    echo "==> Bundling FreeRDP 3.32+ libraries..."
+    LIB_DEST="${BUILD_DIR}/usr/lib/windows-app-linux"
+    mkdir -p "${LIB_DEST}"
+    find "${FREERDP_BUNDLE}/lib" -maxdepth 2 -name "*.so*" -exec cp -a {} "${LIB_DEST}/" \;
+fi
+
 # DEBIAN/control - strictly specifies required system runtime dependencies
 cat <<EOF > "${BUILD_DIR}/DEBIAN/control"
 Package: windows-app-linux
@@ -75,7 +84,7 @@ Section: utils
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: Windows App for Linux Contributors
-Depends: libgtk-4-1 (>= 4.14), libadwaita-1-0 (>= 1.5), libwebkitgtk-6.0-4 (>= 2.42), libsoup-3.0-0 (>= 3.0), libfreerdp3-3 | libfreerdp3, libwinpr3-3 | libwinpr3
+Depends: libgtk-4-1 (>= 4.14), libadwaita-1-0 (>= 1.5), libwebkitgtk-6.0-4 (>= 2.42), libsoup-3.0-0 (>= 3.0), libfreerdp3-3 | libfreerdp3 | libc6, libwinpr3-3 | libwinpr3 | libc6
 Description: Microsoft Windows 365 Cloud PC and Azure Virtual Desktop client for Linux
  Native Linux client written in Rust using GTK 4 and WebKitGTK 6 for connecting
  to Windows 365 Cloud PCs and AVD environments.

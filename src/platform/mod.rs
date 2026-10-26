@@ -15,7 +15,17 @@ mod xdg;
 #[cfg(target_os = "linux")]
 pub use xdg::*;
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+pub use self::windows::*;
+
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+pub use self::macos::*;
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod other {
     /// Desktop scale in percent as configured in the OS, if it can be determined.
     #[must_use]
@@ -71,7 +81,7 @@ mod other {
     /// Removes launcher and login entries of a connection that no longer exists.
     pub fn remove_desktop_integration(_target: &LaunchTarget) {}
 }
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub use other::*;
 
 /// Private folder (created owner-only) for files copied out of sessions. They can be

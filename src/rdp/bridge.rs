@@ -1097,6 +1097,15 @@ impl NativeRdpBridge {
     /// Creates a session from a FreeRDP argument vector (argv[0] included, see
     /// [`crate::session::build_freerdp_args`]). Call [`Self::start`] to connect.
     pub fn new(args: &[String], options: BridgeOptions, sink: EventSink) -> Result<Self> {
+        #[cfg(target_os = "linux")]
+        {
+            if std::env::var_os("PULSE_LATENCY_MSEC").is_none() {
+                std::env::set_var("PULSE_LATENCY_MSEC", "60");
+            }
+            if std::env::var_os("PIPEWIRE_LATENCY").is_none() {
+                std::env::set_var("PIPEWIRE_LATENCY", "1024/48000");
+            }
+        }
         if args.is_empty() {
             return Err(AppError::Session("no FreeRDP arguments".into()));
         }
@@ -1329,7 +1338,11 @@ impl Drop for NativeRdpBridge {
                 drop(shared);
             });
         match spawned {
-            Ok(handle) => lock(&TEARDOWNS).push(handle),
+            Ok(handle) => {
+                let mut handles = lock(&TEARDOWNS);
+                handles.retain(|h| !h.is_finished());
+                handles.push(handle);
+            }
             Err(e) => {
                 log::warn!("Could not spawn teardown thread ({e}); disconnecting inline");
                 ContextPtr(self.ctx).free();

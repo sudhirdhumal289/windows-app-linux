@@ -35,6 +35,11 @@ fn shell(command: &str, context: &HookContext, phase: &str) -> Command {
     let mut cmd = {
         let mut c = Command::new("cmd");
         c.args(["/C", command]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000); // CREATE_NO_WINDOW prevents command prompt flash
+        }
         c
     };
     #[cfg(not(windows))]
@@ -59,7 +64,7 @@ pub fn run_pre_connect(
 ) -> Result<(), HookError> {
     let mut child = shell(command, context, "pre-connect")
         .spawn()
-        .map_err(HookError::Spawn)?;
+        .map_err(HookError::Spawn)? ;
     let deadline = Instant::now() + timeout;
     loop {
         if let Some(status) = child.try_wait().map_err(HookError::Spawn)? {

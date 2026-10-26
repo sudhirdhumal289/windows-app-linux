@@ -2,9 +2,8 @@
 //! pkg-config. A FreeRDP tree bundled at `./freerdp-3.32` (see `scripts/fetch-freerdp.sh`)
 //! takes precedence over the system libraries. On macOS FreeRDP comes from Homebrew
 //! (`brew install freerdp`). On Windows the first build downloads a prebuilt FreeRDP SDK
-//! (pinned in `packaging/windows/freerdp-sdk.txt`), or else installs `vcpkg.json` with
-//! vcpkg, and the FreeRDP DLLs are copied next to the executable, so `cargo build` /
-//! `cargo run` need no setup.
+//! (pinned in `packaging/windows/freerdp-sdk.txt`), and the FreeRDP DLLs are copied next
+//! to the executable, so `cargo build` / `cargo run` need no setup.
 //!
 //! For the WinUI frontend on MSVC the application manifest is embedded in the executable,
 //! and the Windows App SDK runtime is bundled next to it (`windows-reactor-setup`).
@@ -45,30 +44,36 @@ fn main() {
     let probed: Result<Vec<pkg_config::Library>, (String, String)> =
         ["freerdp3", "freerdp-client3", "winpr3"]
             .iter()
-            .map(|name| {
-                // Link flags are emitted after the bridge is compiled (see `emit_link_flags`).
+            .map(|pkg| {
                 pkg_config::Config::new()
-                    .cargo_metadata(false)
-                    .probe(name)
-                    .map_err(|e| ((*name).to_string(), e.to_string()))
+                    .atleast_version("3.0")
+                    .probe(pkg)
+                    .map_err(|e| ((*pkg).to_string(), e.to_string()))
             })
             .collect();
     let libs = match probed {
         Ok(libs) => libs,
-        Err((name, e)) if cross_os => {
+        Err((pkg, e)) if cross_os => {
             println!(
-                "cargo:warning=FreeRDP for {target_os} not found ({name}: {e}); skipping the C bridge. Type checking works, linking will not."
+                "cargo:warning=Skipping FreeRDP bridge for cross target {target_os}: {pkg} not found ({e})."
             );
             return;
         }
-        Err((name, e)) => panic!("{name} not found via pkg-config: {e}"),
+        Err((pkg, e)) => {
+            panic!(
+                "\n\
+                ========================================================================\n\
+                Required FreeRDP 3 library '{pkg}' was not found.\n\
+                pkg-config error: {e}\n\
+                ========================================================================\n"
+            );
+        }
     };
 
-    // Non-system library directories (bundled tree, /usr/local, custom prefixes) need an
-    // rpath so the binary runs without LD_LIBRARY_PATH.
-    let mut rpaths: Vec<&PathBuf> = libs
+    let mut rpaths: Vec<PathBuf> = libs
         .iter()
         .flat_map(|lib| &lib.link_paths)
+        .cloned()
         .filter(|p| !is_system_lib_dir(p))
         .collect();
     rpaths.sort();
@@ -80,34 +85,31 @@ fn main() {
     if !rpaths.is_empty() && target_os == "linux" {
         println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
     }
-    if target_os == "macos" {
-        // Leaves room for scripts/bundle-macos-dylibs.py to rewrite library paths.
-        println!("cargo:rustc-link-arg=-Wl,-headerpad_max_install_names");
-    }
-    let origin = if target_os == "macos" {
-        "@executable_path"
-    } else {
-        "$ORIGIN"
-    };
-    for dir in rpaths {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
-        if let Ok(rel) = dir.strip_prefix(&manifest_dir) {
-            // Lets a binary copied next to the bundled tree (target/<profile>/) find it.
-            println!(
-                "cargo:rustc-link-arg=-Wl,-rpath,{origin}/../../{}",
-                rel.display()
-            );
+    for dir in &rpaths {
+        if target_os == "macos" {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
+        } else {
+            println!("cargo:rustc-link-arg=-Wl,-rpath={}", dir.display());
         }
+    }
+    // Origin-relative rpath on Linux so the binary finds sibling libraries.
+    if target_os == "linux" {
+        println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN/../lib/windows-app-linux");
+        println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN/../lib");
+        println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN");
     }
 
     let mut builder = cc::Build::new();
     builder
         .file("src/rdp/freerdp_bridge.c")
-        .std("c11")
         .warnings(true)
-        // FreeRDP's public headers trigger these; they are not actionable here.
-        .flag_if_supported("-Wno-unused-parameter")
-        .flag_if_supported("-Wno-missing-field-initializers");
+        .extra_warnings(true);
+    for (key, value) in libs.iter().flat_map(|lib| &lib.defines) {
+        match value {
+            Some(v) => builder.define(key, v.as_str()),
+            None => builder.define(key, None),
+        };
+    }
     for path in libs.iter().flat_map(|lib| &lib.include_paths) {
         builder.include(path);
     }
@@ -115,6 +117,8 @@ fn main() {
     emit_link_flags(&libs);
     if target_os == "windows" {
         copy_windows_dlls(&libs);
+    } else if target_os == "linux" {
+        copy_linux_so(&libs);
     }
 }
 
@@ -125,16 +129,11 @@ fn emit_link_flags(libs: &[pkg_config::Library]) {
         for path in &lib.link_paths {
             println!("cargo:rustc-link-search=native={}", path.display());
         }
-        for path in &lib.framework_paths {
-            println!("cargo:rustc-link-search=framework={}", path.display());
-        }
         for name in &lib.libs {
             println!("cargo:rustc-link-lib={name}");
         }
-        for name in &lib.frameworks {
-            println!("cargo:rustc-link-lib=framework={name}");
-        }
-        for args in &lib.ld_args {
+        for flag in &lib.ld_args {
+            let args: Vec<&str> = flag.split_whitespace().collect();
             println!("cargo:rustc-link-arg=-Wl,{}", args.join(","));
         }
     }
@@ -185,9 +184,7 @@ fn bundle_windows_app_sdk(target_os: &str) -> bool {
 /// 1. `PKG_CONFIG_PATH`, if set (FreeRDP from elsewhere, such as MSYS2);
 /// 2. an existing vcpkg install in `vcpkg_installed/` (or `VCPKG_INSTALLED_DIR`) or in the
 ///    `installed` tree of `VCPKG_ROOT`;
-/// 3. the prebuilt SDK pinned in `packaging/windows/freerdp-sdk.txt`, downloaded once
-///    (unless `WINDOWS_APP_NO_PREBUILT` is set);
-/// 4. `vcpkg install` of `vcpkg.json` (unless `WINDOWS_APP_NO_VCPKG` is set).
+/// 3. the prebuilt SDK pinned in `packaging/windows/freerdp-sdk.txt`, downloaded once.
 fn use_windows_freerdp(manifest_dir: &Path) {
     for var in [
         "PKG_CONFIG",
@@ -195,11 +192,9 @@ fn use_windows_freerdp(manifest_dir: &Path) {
         "VCPKG_INSTALLED_DIR",
         "VCPKG_DEFAULT_TRIPLET",
         "WINDOWS_APP_NO_PREBUILT",
-        "WINDOWS_APP_NO_VCPKG",
     ] {
         println!("cargo:rerun-if-env-changed={var}");
     }
-    println!("cargo:rerun-if-changed=vcpkg.json");
     println!("cargo:rerun-if-changed={SDK_PIN_FILE}");
     if env::var_os("PKG_CONFIG_PATH").is_some_and(|p| !p.is_empty()) {
         return;
@@ -223,24 +218,25 @@ fn use_windows_freerdp(manifest_dir: &Path) {
         let (url, sha256) = sdk_pin(&pin, &triplet)?;
         fetch_prebuilt_sdk(url, sha256)
             .map_err(|e| {
-                println!("cargo:warning=Prebuilt FreeRDP SDK unavailable ({e}); using vcpkg");
+                println!("cargo:warning=Prebuilt FreeRDP SDK download failed: {e}");
             })
             .ok()
     };
     let installed = match found.or_else(prebuilt) {
         Some(dir) => dir,
-        None if env::var_os("WINDOWS_APP_NO_VCPKG").is_some() => return,
         None => {
-            let vcpkg = find_or_fetch_vcpkg();
-            run(
-                Command::new(&vcpkg)
-                    .current_dir(manifest_dir)
-                    .arg("install")
-                    .arg(format!("--triplet={triplet}"))
-                    .arg(format!("--x-install-root={}", install_root.display())),
-                "vcpkg install (first build only: compiles FreeRDP, ~15-30 minutes)",
+            panic!(
+                "\n\
+                ========================================================================\n\
+                FreeRDP 3 development libraries were not found for target '{triplet}'.\n\
+                \n\
+                Options to resolve:\n\
+                1. Ensure network access to automatically download the prebuilt SDK\n\
+                   pinned in '{SDK_PIN_FILE}'.\n\
+                2. Or set PKG_CONFIG_PATH pointing to your FreeRDP 3 pkgconfig directory.\n\
+                3. Or build FreeRDP with vcpkg: 'vcpkg install --triplet={triplet}'.\n\
+                ========================================================================\n"
             );
-            install_root.join(&triplet)
         }
     };
     let pc_dir = installed.join("lib").join("pkgconfig");
@@ -380,60 +376,8 @@ fn vcpkg_roots() -> Vec<PathBuf> {
         .collect()
 }
 
-/// A vcpkg with a ports tree (the copy bundled with Visual Studio has none), or a private
-/// clone in `%LOCALAPPDATA%\windows-app-linux\vcpkg`, created on first use.
-fn find_or_fetch_vcpkg() -> PathBuf {
-    if let Some(exe) = vcpkg_roots()
-        .into_iter()
-        .filter(|root| root.join("ports").is_dir())
-        .map(|root| root.join("vcpkg.exe"))
-        .find(|exe| exe.is_file())
-    {
-        return exe;
-    }
-    let cache = env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir);
-    let root = cache.join("windows-app-linux").join("vcpkg");
-    let exe = root.join("vcpkg.exe");
-    if exe.is_file() {
-        return exe;
-    }
-    if !root.join("ports").is_dir() {
-        let _ = fs::remove_dir_all(&root);
-        run(
-            Command::new("git")
-                .args([
-                    "clone",
-                    "--depth=1",
-                    "https://github.com/microsoft/vcpkg.git",
-                ])
-                .arg(&root),
-            "git clone vcpkg (git is needed to fetch FreeRDP)",
-        );
-    }
-    run(
-        Command::new("cmd")
-            .arg("/C")
-            .arg(root.join("bootstrap-vcpkg.bat"))
-            .arg("-disableMetrics"),
-        "bootstrap-vcpkg",
-    );
-    exe
-}
-
-/// Runs a setup command, sending its output to the build log (stdout is reserved for
-/// cargo directives); panics with `what` on failure.
-fn run(command: &mut Command, what: &str) {
-    let status = command
-        .stdout(std::io::stderr())
-        .status()
-        .unwrap_or_else(|e| panic!("{what}: could not start: {e}"));
-    assert!(status.success(), "{what} failed ({status})");
-}
-
-/// Windows has no rpath: copies the DLLs of the libraries FreeRDP was found in (the `bin`
-/// directory beside each `lib`) next to the executables and test binaries.
+/// Windows has no rpath: copies the DLLs and provider modules of the libraries FreeRDP was found in
+/// (the `bin` directory beside each `lib`) next to the executables and test binaries.
 fn copy_windows_dlls(libs: &[pkg_config::Library]) {
     let Some(profile_dir) = env::var_os("OUT_DIR")
         .map(PathBuf::from)
@@ -458,14 +402,64 @@ fn copy_windows_dlls(libs: &[pkg_config::Library]) {
             let is_dll = path
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"));
-            if !is_dll {
+            if is_dll {
+                for dest in [&profile_dir, &profile_dir.join("deps")] {
+                    let target = dest.join(entry.file_name());
+                    if fs::create_dir_all(dest).is_ok() && fs::copy(&path, &target).is_err() {
+                        // Usually the app is running and holds the DLL; the old copy stays.
+                        println!("cargo:warning=could not update {}", target.display());
+                    }
+                }
+            } else if path.is_dir() && entry.file_name() == "ossl-modules" {
+                // Copy OpenSSL 3 provider modules (e.g. legacy.dll for NTLM MD4 support)
+                for dest in [&profile_dir, &profile_dir.join("deps")] {
+                    let target_dir = dest.join("ossl-modules");
+                    let _ = fs::create_dir_all(&target_dir);
+                    if let Ok(mod_entries) = fs::read_dir(&path) {
+                        for mod_entry in mod_entries.flatten() {
+                            let _ = fs::copy(mod_entry.path(), target_dir.join(mod_entry.file_name()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+/// Copies non-system shared libraries next to executables and test binaries so that
+/// origin-relative RPATH ($ORIGIN) resolves bundled FreeRDP without requiring LD_LIBRARY_PATH.
+fn copy_linux_so(libs: &[pkg_config::Library]) {
+    let Some(profile_dir) = env::var_os("OUT_DIR")
+        .map(PathBuf::from)
+        .and_then(|out| out.ancestors().nth(3).map(Path::to_path_buf))
+    else {
+        return;
+    };
+    for lib in libs {
+        for lib_dir in &lib.link_paths {
+            if is_system_lib_dir(lib_dir) {
                 continue;
             }
-            for dest in [profile_dir.clone(), profile_dir.join("deps")] {
-                let target = dest.join(entry.file_name());
-                if fs::create_dir_all(&dest).is_ok() && fs::copy(&path, &target).is_err() {
-                    // Usually the app is running and holds the DLL; the old copy stays.
-                    println!("cargo:warning=could not update {}", target.display());
+            let Ok(entries) = fs::read_dir(lib_dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                if name_str.contains(".so") {
+                    for dest in [&profile_dir, &profile_dir.join("deps")] {
+                        let target = dest.join(&name);
+                        let _ = fs::create_dir_all(dest);
+                        let _ = fs::remove_file(&target);
+                        if let Ok(link_dest) = fs::read_link(&path) {
+                            #[cfg(unix)]
+                            let _ = std::os::unix::fs::symlink(&link_dest, &target);
+                        } else {
+                            let _ = fs::copy(&path, &target);
+                        }
+                    }
                 }
             }
         }
@@ -490,21 +484,28 @@ fn prefer_bundled_freerdp(root: &Path) {
         } else {
             lib_root.join(triplet).join("pkgconfig")
         };
-        if pc_dir.exists() {
-            let existing = env::var("PKG_CONFIG_PATH").unwrap_or_default();
-            let joined = if existing.is_empty() {
-                pc_dir.display().to_string()
-            } else {
-                format!("{}:{existing}", pc_dir.display())
-            };
-            env::set_var("PKG_CONFIG_PATH", joined);
-            return;
+        if pc_dir.is_dir() {
+            println!("cargo:rerun-if-changed={}", pc_dir.display());
+            let current = env::var_os("PKG_CONFIG_PATH").unwrap_or_default();
+            let mut paths = env::split_paths(&current).collect::<Vec<_>>();
+            paths.insert(0, pc_dir);
+            if let Ok(joined) = env::join_paths(paths) {
+                env::set_var("PKG_CONFIG_PATH", joined);
+            }
+            break;
         }
     }
 }
 
-fn is_system_lib_dir(dir: &Path) -> bool {
-    SYSTEM_LIB_DIRS
-        .iter()
-        .any(|sys| dir == Path::new(sys) || dir.parent() == Some(Path::new(sys)))
+fn is_system_lib_dir(path: &Path) -> bool {
+    let path_str = path.to_string_lossy();
+    SYSTEM_LIB_DIRS.iter().any(|&sys| {
+        path_str == sys
+            || path_str.strip_prefix(sys).is_some_and(|rest| {
+                rest.starts_with('/')
+                    && !rest.contains("/app/")
+                    && !rest.contains("/opt/")
+                    && !rest.contains("/freerdp")
+            })
+    })
 }

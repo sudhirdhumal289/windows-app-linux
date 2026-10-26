@@ -431,7 +431,15 @@ fn use_graphics_pipeline(target: &Target<'_>, opts: &SessionOptions) -> bool {
 /// elsewhere FreeRDP picks the platform backend (WinMM on Windows, Core Audio on macOS).
 fn audio_arg(channel: &str) -> String {
     if cfg!(target_os = "linux") {
-        format!("/{channel}:sys:pulse")
+        if channel == "microphone" {
+            // FreeRDP audio input [MS-RDPEAI] on Linux:
+            // format:1 enforces raw uncompressed 16-bit PCM (WAVE_FORMAT_PCM) instead of
+            // lossy compression codecs (which cause noisy or muffled audio), and rate:44100
+            // aligns with Windows Audio Service to prevent sample-rate resampling jitter.
+            format!("/{channel}:sys:pulse,format:1,rate:44100")
+        } else {
+            format!("/{channel}:sys:pulse")
+        }
     } else {
         format!("/{channel}")
     }
@@ -632,6 +640,59 @@ pub fn rdp_property<'a>(rdp_file: &'a str, key: &str) -> Option<&'a str> {
     })
 }
 
+/// Harmonizes an `.rdp` file downloaded from Cloud PC/AVD with the user's active session options.
+/// Ensures standard RDP properties (`camerastoredirect`, `audiocapturemode`, etc.) match the user's choices,
+/// preventing host-side policy defaults (such as empty `camerastoredirect:s:`) from overriding
+/// or conflicting with FreeRDP dynamic virtual channels (`/dvc:rdpecam`).
+#[must_use]
+pub fn sync_rdp_file_content(content: &str, opts: &SessionOptions) -> String {
+    let mut properties: Vec<(String, char, String)> = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut parts = trimmed.splitn(3, ':');
+        if let (Some(k), Some(ty), Some(v)) = (parts.next(), parts.next(), parts.next()) {
+            let key = k.trim().to_ascii_lowercase();
+            let ty_char = ty.chars().next().unwrap_or('s');
+            properties.push((key, ty_char, v.trim().to_string()));
+        }
+    }
+
+    // Overrides / injections to guarantee alignment with SessionOptions:
+    let desired: [(&str, char, String); 6] = [
+        ("camerastoredirect", 's', if opts.camera { "*".to_string() } else { String::new() }),
+        ("audiocapturemode", 'i', if opts.microphone { "1".to_string() } else { "0".to_string() }),
+        ("audiomode", 'i', if opts.audio { "0".to_string() } else { "1".to_string() }),
+        ("redirectclipboard", 'i', if opts.clipboard { "1".to_string() } else { "0".to_string() }),
+        ("redirectprinters", 'i', if opts.printers { "1".to_string() } else { "0".to_string() }),
+        ("redirectsmartcards", 'i', if opts.smartcard { "1".to_string() } else { "0".to_string() }),
+    ];
+
+    for (target_key, target_ty, target_val) in desired {
+        let mut found = false;
+        for (k, ty, v) in &mut properties {
+            if k == target_key {
+                *ty = target_ty;
+                *v = target_val.clone();
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            properties.push((target_key.to_string(), target_ty, target_val));
+        }
+    }
+
+    let mut out = String::with_capacity(content.len() + 128);
+    for (k, ty, v) in properties {
+        out.push_str(&format!("{k}:{ty}:{v}\r\n"));
+    }
+    out
+}
+
 /// An owner-only `.rdp` file in the runtime directory, deleted when dropped.
 #[derive(Debug)]
 pub struct RdpFile {
@@ -700,7 +761,8 @@ impl std::fmt::Debug for PreparedSession {
 
 /// Prepares a Cloud PC session from the launch details returned by the service.
 pub fn prepare(launch: &RdpLaunch, opts: &SessionOptions) -> std::io::Result<PreparedSession> {
-    let rdp_file = RdpFile::create(&launch.rdp_file)?;
+    let synced = sync_rdp_file_content(&launch.rdp_file, opts);
+    let rdp_file = RdpFile::create(&synced)?;
     let args = build_freerdp_args(rdp_file.path(), &launch.gateway_token, opts);
     Ok(PreparedSession {
         rdp_file: Some(rdp_file),
@@ -1072,5 +1134,21 @@ mod tests {
         }
         drop(file);
         assert!(!path.exists());
+    }
+    #[test]
+    fn syncs_rdp_file_content_with_session_options() {
+        let base = "full address:s:avd-host.cloud.microsoft\r\ncamerastoredirect:s:\r\naudiocapturemode:i:0\r\n";
+        let synced = sync_rdp_file_content(base, &opts());
+        assert_eq!(rdp_property(&synced, "camerastoredirect"), Some("*"));
+        assert_eq!(rdp_property(&synced, "audiocapturemode"), Some("0"));
+        assert_eq!(rdp_property(&synced, "audiomode"), Some("0"));
+        assert_eq!(rdp_property(&synced, "redirectclipboard"), Some("1"));
+
+        let mut o = opts();
+        o.camera = false;
+        o.microphone = true;
+        let synced_no_cam = sync_rdp_file_content(base, &o);
+        assert_eq!(rdp_property(&synced_no_cam, "camerastoredirect"), Some(""));
+        assert_eq!(rdp_property(&synced_no_cam, "audiocapturemode"), Some("1"));
     }
 }
