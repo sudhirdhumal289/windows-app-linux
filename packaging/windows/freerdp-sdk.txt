@@ -3,4 +3,4 @@
 # updates this file. A triplet without an entry here falls back to vcpkg.
 #
 # <vcpkg triplet> <download URL> <sha256 of the zip>
-x64-windows https://github.com/sudhirdhumal289/windows-app-linux/releases/download/freerdp-sdk-3.32.2-1/freerdp-sdk-x64-windows.zip c65b57e61784458a43fbe5dcd2c3c33b9f49855e17052b12b2548970bd27f961
+x64-windows https://github.com/sudhirdhumal289/windows-app-linux/releases/download/freerdp-sdk-3.32.2-2/freerdp-sdk-x64-windows.zip 6a94c6d2e1f6f14a41534f40256625f3787db1b5be4f67c698ebc91106add6d3
