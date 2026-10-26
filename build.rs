@@ -1,7 +1,7 @@
 //! Compiles the FreeRDP C glue (`src/rdp/freerdp_bridge.c`) against FreeRDP 3 found via
 //! pkg-config. A FreeRDP tree bundled at `./freerdp-3.32` (see `scripts/fetch-freerdp.sh`)
 //! takes precedence over the system libraries. On macOS FreeRDP comes from Homebrew
-//! (`brew install freerdp`), on Windows from vcpkg (`vcpkg install freerdp`) with pkgconf.
+//! (`brew install freerdp`), on Windows from vcpkg (`vcpkg install "freerdp[client]"`) with pkgconf.
 //!
 //! For the WinUI frontend on MSVC the application manifest is embedded in the executable.
 //!
@@ -36,7 +36,11 @@ fn main() {
         ["freerdp3", "freerdp-client3", "winpr3"]
             .iter()
             .map(|name| {
-                pkg_config::probe_library(name).map_err(|e| ((*name).to_string(), e.to_string()))
+                // Link flags are emitted after the bridge is compiled (see `emit_link_flags`).
+                pkg_config::Config::new()
+                    .cargo_metadata(false)
+                    .probe(name)
+                    .map_err(|e| ((*name).to_string(), e.to_string()))
             })
             .collect();
     let libs = match probed {
@@ -66,6 +70,10 @@ fn main() {
     if !rpaths.is_empty() && target_os == "linux" {
         println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
     }
+    if target_os == "macos" {
+        // Leaves room for scripts/bundle-macos-dylibs.py to rewrite library paths.
+        println!("cargo:rustc-link-arg=-Wl,-headerpad_max_install_names");
+    }
     let origin = if target_os == "macos" {
         "@executable_path"
     } else {
@@ -94,6 +102,29 @@ fn main() {
         builder.include(path);
     }
     builder.compile("freerdp_bridge");
+    emit_link_flags(&libs);
+}
+
+/// Links FreeRDP after the static bridge library. GNU ld resolves archives (including
+/// Windows import libraries) left to right, so the libraries the bridge uses must follow it.
+fn emit_link_flags(libs: &[pkg_config::Library]) {
+    for lib in libs {
+        for path in &lib.link_paths {
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
+        for path in &lib.framework_paths {
+            println!("cargo:rustc-link-search=framework={}", path.display());
+        }
+        for name in &lib.libs {
+            println!("cargo:rustc-link-lib={name}");
+        }
+        for name in &lib.frameworks {
+            println!("cargo:rustc-link-lib=framework={name}");
+        }
+        for args in &lib.ld_args {
+            println!("cargo:rustc-link-arg=-Wl,{}", args.join(","));
+        }
+    }
 }
 
 /// Embeds `packaging/windows/windows-app.manifest` (per-monitor DPI, Common Controls 6)

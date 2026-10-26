@@ -146,6 +146,9 @@ typedef struct {
 /* FreeRDP library version string. */
 const char* freerdp_bridge_version(void);
 
+/* FreeRDP build configuration (space separated `OPTION=VALUE` entries). */
+const char* freerdp_bridge_build_config(void);
+
 /* Parses `args` (argv[0] included) like the FreeRDP command line. Returns NULL on failure. */
 RdpBridgeContext* freerdp_bridge_create(const char* const* args, int argc,
                                         const char* gateway_token,

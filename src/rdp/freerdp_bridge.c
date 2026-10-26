@@ -5,7 +5,6 @@
 
 #include "freerdp_bridge.h"
 
-#include <pthread.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +29,10 @@
 #include <winpr/user.h>
 #include <winpr/wlog.h>
 
+#if !defined(_WIN32)
+#include <pthread.h>
+#endif
+
 #define TAG "com.windowsapp.bridge"
 /* Interactive Entra ID sign-in (MFA included) must finish within this time. */
 #define AUTH_TIMEOUT_MS (5 * 60 * 1000)
@@ -38,6 +41,68 @@
 #define MAX_MONITOR_SIZE 8192
 /* How often network characteristics are reported. */
 #define NETWORK_POLL_MS 2000
+
+/* ---- Portable locks ---------------------------------------------------------------------
+ * pthreads on POSIX; slim reader/writer locks and one-time init on Windows, where MSVC has
+ * no pthreads. Read and write unlocks are separate because SRW locks need the mode. */
+
+#if defined(_WIN32)
+typedef SRWLOCK BridgeMutex;
+typedef SRWLOCK BridgeRwLock;
+typedef INIT_ONCE BridgeOnce;
+#define BRIDGE_MUTEX_INITIALIZER SRWLOCK_INIT
+#define BRIDGE_ONCE_INITIALIZER INIT_ONCE_STATIC_INIT
+
+static BOOL bridge_mutex_init(BridgeMutex* m) {
+    InitializeSRWLock(m);
+    return TRUE;
+}
+static void bridge_mutex_destroy(BridgeMutex* m) { (void)m; }
+static void bridge_mutex_lock(BridgeMutex* m) { AcquireSRWLockExclusive(m); }
+static void bridge_mutex_unlock(BridgeMutex* m) { ReleaseSRWLockExclusive(m); }
+static BOOL bridge_rwlock_init(BridgeRwLock* l) {
+    InitializeSRWLock(l);
+    return TRUE;
+}
+static void bridge_rwlock_destroy(BridgeRwLock* l) { (void)l; }
+static void bridge_rwlock_read(BridgeRwLock* l) { AcquireSRWLockShared(l); }
+static void bridge_rwlock_read_unlock(BridgeRwLock* l) { ReleaseSRWLockShared(l); }
+static void bridge_rwlock_write(BridgeRwLock* l) { AcquireSRWLockExclusive(l); }
+static void bridge_rwlock_write_unlock(BridgeRwLock* l) { ReleaseSRWLockExclusive(l); }
+
+typedef struct {
+    void (*fn)(void);
+} BridgeOnceFn;
+
+static BOOL CALLBACK bridge_once_trampoline(PINIT_ONCE once, PVOID param, PVOID* context) {
+    (void)once;
+    (void)context;
+    ((const BridgeOnceFn*)param)->fn();
+    return TRUE;
+}
+static void bridge_once(BridgeOnce* once, void (*fn)(void)) {
+    BridgeOnceFn call = { fn };
+    InitOnceExecuteOnce(once, bridge_once_trampoline, &call, NULL);
+}
+#else
+typedef pthread_mutex_t BridgeMutex;
+typedef pthread_rwlock_t BridgeRwLock;
+typedef pthread_once_t BridgeOnce;
+#define BRIDGE_MUTEX_INITIALIZER PTHREAD_MUTEX_INITIALIZER
+#define BRIDGE_ONCE_INITIALIZER PTHREAD_ONCE_INIT
+
+static BOOL bridge_mutex_init(BridgeMutex* m) { return pthread_mutex_init(m, NULL) == 0; }
+static void bridge_mutex_destroy(BridgeMutex* m) { pthread_mutex_destroy(m); }
+static void bridge_mutex_lock(BridgeMutex* m) { pthread_mutex_lock(m); }
+static void bridge_mutex_unlock(BridgeMutex* m) { pthread_mutex_unlock(m); }
+static BOOL bridge_rwlock_init(BridgeRwLock* l) { return pthread_rwlock_init(l, NULL) == 0; }
+static void bridge_rwlock_destroy(BridgeRwLock* l) { pthread_rwlock_destroy(l); }
+static void bridge_rwlock_read(BridgeRwLock* l) { pthread_rwlock_rdlock(l); }
+static void bridge_rwlock_read_unlock(BridgeRwLock* l) { pthread_rwlock_unlock(l); }
+static void bridge_rwlock_write(BridgeRwLock* l) { pthread_rwlock_wrlock(l); }
+static void bridge_rwlock_write_unlock(BridgeRwLock* l) { pthread_rwlock_unlock(l); }
+static void bridge_once(BridgeOnce* once, void (*fn)(void)) { pthread_once(once, fn); }
+#endif
 /* Pending remote file contents requests (see freerdp_bridge_request_file_contents). */
 #define MAX_FILE_REQUESTS 64
 /* Largest file contents chunk requested from or sent to the host. */
@@ -67,16 +132,16 @@ typedef struct {
     HANDLE thread;          /* owned by the caller of start/stop (one thread at a time) */
 
     BOOL locks_ready;
-    pthread_mutex_t auth_lock;
+    BridgeMutex auth_lock;
     char* token_request; /* guarded by auth_lock */
     int cert_answer;     /* guarded by auth_lock; -1 while unanswered */
 
     /* Input may only be injected while the transport is up; guarded by input_lock. */
-    pthread_rwlock_t input_lock;
+    BridgeRwLock input_lock;
     BOOL input_ready;
 
     /* Channel interfaces and queued work; guarded by work_lock. */
-    pthread_mutex_t work_lock;
+    BridgeMutex work_lock;
     DispClientContext* disp;
     BOOL disp_ready;      /* server sent its Display Control capabilities */
     UINT32 disp_max_monitors;
@@ -136,33 +201,33 @@ static void bridge_free_secret(char* str) {
 }
 
 static char* bridge_take_token_request(BridgeClientContext* bctx) {
-    pthread_mutex_lock(&bctx->auth_lock);
+    bridge_mutex_lock(&bctx->auth_lock);
     char* req = bctx->token_request;
     bctx->token_request = NULL;
-    pthread_mutex_unlock(&bctx->auth_lock);
+    bridge_mutex_unlock(&bctx->auth_lock);
     return req;
 }
 
 static void bridge_set_input_ready(BridgeClientContext* bctx, BOOL ready) {
-    pthread_rwlock_wrlock(&bctx->input_lock);
+    bridge_rwlock_write(&bctx->input_lock);
     bctx->input_ready = ready;
-    pthread_rwlock_unlock(&bctx->input_lock);
+    bridge_rwlock_write_unlock(&bctx->input_lock);
 }
 
 /* Returns the input interface with the read lock held, or NULL (lock released). */
 static rdpInput* bridge_input_begin(RdpBridgeContext* ctx) {
     if (!ctx || !ctx->rdp_ctx) return NULL;
     BridgeClientContext* bctx = (BridgeClientContext*)ctx->rdp_ctx;
-    pthread_rwlock_rdlock(&bctx->input_lock);
+    bridge_rwlock_read(&bctx->input_lock);
     if (bctx->input_ready && ctx->rdp_ctx->input) {
         return ctx->rdp_ctx->input;
     }
-    pthread_rwlock_unlock(&bctx->input_lock);
+    bridge_rwlock_read_unlock(&bctx->input_lock);
     return NULL;
 }
 
 static void bridge_input_end(RdpBridgeContext* ctx) {
-    pthread_rwlock_unlock(&((BridgeClientContext*)ctx->rdp_ctx)->input_lock);
+    bridge_rwlock_read_unlock(&((BridgeClientContext*)ctx->rdp_ctx)->input_lock);
 }
 
 /* ---- Authentication -------------------------------------------------------------------- */
@@ -264,19 +329,19 @@ static DWORD bridge_ask_certificate(freerdp* instance, const RdpBridgeCertificat
         return bridge_reject_certificate(instance, cert->host, cert->port, reject_hint);
     }
 
-    pthread_mutex_lock(&bctx->auth_lock);
+    bridge_mutex_lock(&bctx->auth_lock);
     bctx->cert_answer = -1;
-    pthread_mutex_unlock(&bctx->auth_lock);
+    bridge_mutex_unlock(&bctx->auth_lock);
     ResetEvent(bctx->cert_done_event);
     bridge_status(bctx, RDP_BRIDGE_STATUS_PROGRESS, "Verifying the remote computer's certificate...");
     bctx->cb.on_certificate(bctx->cb.user_data, cert);
 
     HANDLE events[2] = { bctx->cert_done_event, bctx->stop_event };
     DWORD wait = WaitForMultipleObjects(2, events, FALSE, CERT_TIMEOUT_MS);
-    pthread_mutex_lock(&bctx->auth_lock);
+    bridge_mutex_lock(&bctx->auth_lock);
     int answer = bctx->cert_answer;
     bctx->cert_answer = -1;
-    pthread_mutex_unlock(&bctx->auth_lock);
+    bridge_mutex_unlock(&bctx->auth_lock);
 
     if (wait == WAIT_OBJECT_0 &&
         (answer == RDP_BRIDGE_CERT_ACCEPT || answer == RDP_BRIDGE_CERT_ACCEPT_ONCE)) {
@@ -368,7 +433,7 @@ static BOOL bridge_end_paint(rdpContext* context) {
  * else, e.g. back to the connection size when Windows completes the user sign-in. */
 static void bridge_check_layout(BridgeClientContext* bctx, UINT32 width, UINT32 height) {
     BOOL resend = FALSE;
-    pthread_mutex_lock(&bctx->work_lock);
+    bridge_mutex_lock(&bctx->work_lock);
     if (bctx->last_count > 0 && !bctx->resize_pending) {
         INT64 left = INT32_MAX, top = INT32_MAX, right = INT32_MIN, bottom = INT32_MIN;
         for (UINT32 i = 0; i < bctx->last_count; i++) {
@@ -390,7 +455,7 @@ static void bridge_check_layout(BridgeClientContext* bctx, UINT32 width, UINT32 
             resend = TRUE;
         }
     }
-    pthread_mutex_unlock(&bctx->work_lock);
+    bridge_mutex_unlock(&bctx->work_lock);
     if (resend) {
         WLog_Print(bridge_log(), WLOG_DEBUG, "Host desktop is %ux%u; re-sending the layout",
                    width, height);
@@ -516,7 +581,7 @@ static void bridge_process_work(BridgeClientContext* bctx) {
     BridgeFileRequest file_requests[MAX_FILE_REQUESTS];
     UINT32 file_request_count = 0;
 
-    pthread_mutex_lock(&bctx->work_lock);
+    bridge_mutex_lock(&bctx->work_lock);
     ResetEvent(bctx->work_event);
     if (bctx->resize_pending && bctx->disp && bctx->disp_ready && bctx->disp->SendMonitorLayout) {
         bctx->resize_pending = FALSE;
@@ -543,7 +608,7 @@ static void bridge_process_work(BridgeClientContext* bctx) {
     file_request_count = bctx->file_request_count;
     memcpy(file_requests, bctx->file_requests, file_request_count * sizeof(file_requests[0]));
     bctx->file_request_count = 0;
-    pthread_mutex_unlock(&bctx->work_lock);
+    bridge_mutex_unlock(&bctx->work_lock);
 
     if (send_layout) {
         WLog_Print(bridge_log(), WLOG_DEBUG, "Monitor layout: %u monitor(s), primary %ux%u scale %u/%u",
@@ -699,10 +764,10 @@ static UINT bridge_display_control_caps(DispClientContext* disp, UINT32 max_moni
     WLog_Print(bridge_log(), WLOG_DEBUG, "Display Control caps: monitors=%u area=%ux%u",
                max_monitors, area_factor_a, area_factor_b);
     if (bctx) {
-        pthread_mutex_lock(&bctx->work_lock);
+        bridge_mutex_lock(&bctx->work_lock);
         bctx->disp_ready = TRUE;
         bctx->disp_max_monitors = max_monitors;
-        pthread_mutex_unlock(&bctx->work_lock);
+        bridge_mutex_unlock(&bctx->work_lock);
         SetEvent(bctx->work_event);
     }
     return CHANNEL_RC_OK;
@@ -741,10 +806,10 @@ static UINT bridge_cliprdr_monitor_ready(CliprdrClientContext* cliprdr,
     BridgeClientContext* bctx = (BridgeClientContext*)cliprdr->custom;
     UINT32 kind = RDP_BRIDGE_LOCAL_NONE;
     if (bctx) {
-        pthread_mutex_lock(&bctx->work_lock);
+        bridge_mutex_lock(&bctx->work_lock);
         kind = bctx->local_clip_kind;
         bctx->clipboard_pending = FALSE;
-        pthread_mutex_unlock(&bctx->work_lock);
+        bridge_mutex_unlock(&bctx->work_lock);
     }
     return bridge_cliprdr_send_format_list(cliprdr, kind);
 }
@@ -761,10 +826,10 @@ static UINT bridge_cliprdr_server_format_list(CliprdrClientContext* cliprdr,
     if (rc != CHANNEL_RC_OK) return rc;
 
     /* The host owns the clipboard now; local content is no longer on offer. */
-    pthread_mutex_lock(&bctx->work_lock);
+    bridge_mutex_lock(&bctx->work_lock);
     bctx->local_clip_kind = RDP_BRIDGE_LOCAL_NONE;
     bctx->clipboard_pending = FALSE;
-    pthread_mutex_unlock(&bctx->work_lock);
+    bridge_mutex_unlock(&bctx->work_lock);
     if (bctx->cb.on_clipboard) {
         bctx->cb.on_clipboard(bctx->cb.user_data, RDP_BRIDGE_CLIP_CHANGED, NULL, 0);
     }
@@ -793,19 +858,19 @@ static UINT bridge_cliprdr_server_format_list(CliprdrClientContext* cliprdr,
     if (kind == RDP_BRIDGE_CLIP_CHANGED) return CHANNEL_RC_OK;
 
     /* Format data responses don't name their format; they answer requests in order. */
-    pthread_mutex_lock(&bctx->work_lock);
+    bridge_mutex_lock(&bctx->work_lock);
     bctx->remote_requests_pending++;
     bctx->remote_request_kind = kind;
-    pthread_mutex_unlock(&bctx->work_lock);
+    bridge_mutex_unlock(&bctx->work_lock);
 
     CLIPRDR_FORMAT_DATA_REQUEST req = { 0 };
     req.common.msgType = CB_FORMAT_DATA_REQUEST;
     req.requestedFormatId = format_id;
     rc = cliprdr->ClientFormatDataRequest(cliprdr, &req);
     if (rc != CHANNEL_RC_OK) {
-        pthread_mutex_lock(&bctx->work_lock);
+        bridge_mutex_lock(&bctx->work_lock);
         if (bctx->remote_requests_pending > 0) bctx->remote_requests_pending--;
-        pthread_mutex_unlock(&bctx->work_lock);
+        bridge_mutex_unlock(&bctx->work_lock);
     }
     return rc;
 }
@@ -853,13 +918,13 @@ static UINT bridge_cliprdr_server_format_data_response(
     if (!bctx || !response) return CHANNEL_RC_OK;
 
     UINT32 kind = RDP_BRIDGE_CLIP_CHANGED;
-    pthread_mutex_lock(&bctx->work_lock);
+    bridge_mutex_lock(&bctx->work_lock);
     if (bctx->remote_requests_pending > 0) {
         bctx->remote_requests_pending--;
         /* Answers to requests made before the latest format list are stale. */
         if (bctx->remote_requests_pending == 0) kind = bctx->remote_request_kind;
     }
-    pthread_mutex_unlock(&bctx->work_lock);
+    bridge_mutex_unlock(&bctx->work_lock);
 
     if (kind == RDP_BRIDGE_CLIP_CHANGED || (response->common.msgFlags & CB_RESPONSE_FAIL) ||
         !response->requestedFormatData || response->common.dataLen == 0) {
@@ -969,7 +1034,7 @@ static void bridge_on_channel_connected(void* context, const ChannelConnectedEve
         DispClientContext* disp = (DispClientContext*)e->pInterface;
         disp->custom = bctx;
         disp->DisplayControlCaps = bridge_display_control_caps;
-        pthread_mutex_lock(&bctx->work_lock);
+        bridge_mutex_lock(&bctx->work_lock);
         bctx->disp = disp;
         bctx->disp_ready = FALSE;
         bctx->disp_max_monitors = 0;
@@ -983,7 +1048,7 @@ static void bridge_on_channel_connected(void* context, const ChannelConnectedEve
         }
         bctx->last_count = 0;
         bctx->layout_resent = FALSE;
-        pthread_mutex_unlock(&bctx->work_lock);
+        bridge_mutex_unlock(&bctx->work_lock);
     } else if (e->name && strcmp(e->name, RAIL_SVC_CHANNEL_NAME) == 0) {
         RailClientContext* rail = (RailClientContext*)e->pInterface;
         /* client_rail_server_start_cmd() expects the rdpClientContext here. */
@@ -1004,10 +1069,10 @@ static void bridge_on_channel_connected(void* context, const ChannelConnectedEve
         cliprdr->ServerFileContentsResponse = bridge_cliprdr_server_file_contents_response;
         cliprdr->ServerLockClipboardData = bridge_cliprdr_server_lock_clipboard_data;
         cliprdr->ServerUnlockClipboardData = bridge_cliprdr_server_unlock_clipboard_data;
-        pthread_mutex_lock(&bctx->work_lock);
+        bridge_mutex_lock(&bctx->work_lock);
         bctx->cliprdr = cliprdr;
         bctx->remote_requests_pending = 0;
-        pthread_mutex_unlock(&bctx->work_lock);
+        bridge_mutex_unlock(&bctx->work_lock);
     }
     freerdp_client_OnChannelConnectedEventHandler(context, e);
 }
@@ -1016,7 +1081,7 @@ static void bridge_on_channel_disconnected(void* context, const ChannelDisconnec
     BridgeClientContext* bctx = (BridgeClientContext*)context;
     BridgeFileRequest dropped[MAX_FILE_REQUESTS];
     UINT32 dropped_count = 0;
-    pthread_mutex_lock(&bctx->work_lock);
+    bridge_mutex_lock(&bctx->work_lock);
     if (e->name && strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
         bctx->disp = NULL;
         bctx->disp_ready = FALSE;
@@ -1028,7 +1093,7 @@ static void bridge_on_channel_disconnected(void* context, const ChannelDisconnec
         memcpy(dropped, bctx->file_requests, dropped_count * sizeof(dropped[0]));
         bctx->file_request_count = 0;
     }
-    pthread_mutex_unlock(&bctx->work_lock);
+    bridge_mutex_unlock(&bctx->work_lock);
     for (UINT32 i = 0; i < dropped_count; i++) {
         bridge_file_contents_failed(bctx, dropped[i].stream_id);
     }
@@ -1039,14 +1104,14 @@ static void bridge_on_channel_disconnected(void* context, const ChannelDisconnec
 
 static BOOL bridge_client_new(freerdp* instance, rdpContext* context) {
     BridgeClientContext* bctx = (BridgeClientContext*)context;
-    if (pthread_mutex_init(&bctx->auth_lock, NULL) != 0) return FALSE;
-    if (pthread_mutex_init(&bctx->work_lock, NULL) != 0) {
-        pthread_mutex_destroy(&bctx->auth_lock);
+    if (!bridge_mutex_init(&bctx->auth_lock)) return FALSE;
+    if (!bridge_mutex_init(&bctx->work_lock)) {
+        bridge_mutex_destroy(&bctx->auth_lock);
         return FALSE;
     }
-    if (pthread_rwlock_init(&bctx->input_lock, NULL) != 0) {
-        pthread_mutex_destroy(&bctx->work_lock);
-        pthread_mutex_destroy(&bctx->auth_lock);
+    if (!bridge_rwlock_init(&bctx->input_lock)) {
+        bridge_mutex_destroy(&bctx->work_lock);
+        bridge_mutex_destroy(&bctx->auth_lock);
         return FALSE;
     }
     bctx->locks_ready = TRUE;
@@ -1097,20 +1162,24 @@ static void bridge_client_free(freerdp* instance, rdpContext* context) {
     bridge_close_handle(&bctx->cert_done_event);
     bridge_close_handle(&bctx->work_event);
     if (bctx->locks_ready) {
-        pthread_rwlock_destroy(&bctx->input_lock);
-        pthread_mutex_destroy(&bctx->work_lock);
-        pthread_mutex_destroy(&bctx->auth_lock);
+        bridge_rwlock_destroy(&bctx->input_lock);
+        bridge_mutex_destroy(&bctx->work_lock);
+        bridge_mutex_destroy(&bctx->auth_lock);
         bctx->locks_ready = FALSE;
     }
 }
 
 /* FreeRDP context creation/destruction touches process-global state (channel addin
  * registry, WLog), so it is serialised. */
-static pthread_mutex_t g_context_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_once_t g_logging_once = PTHREAD_ONCE_INIT;
+static BridgeMutex g_context_lock = BRIDGE_MUTEX_INITIALIZER;
+static BridgeOnce g_logging_once = BRIDGE_ONCE_INITIALIZER;
 
 const char* freerdp_bridge_version(void) {
     return freerdp_get_version_string();
+}
+
+const char* freerdp_bridge_build_config(void) {
+    return freerdp_get_build_config();
 }
 
 static BOOL bridge_parse_args(rdpContext* ctx, const char* const* args, int argc) {
@@ -1173,7 +1242,7 @@ RdpBridgeContext* freerdp_bridge_create(const char* const* args, int argc,
                                         const char* gateway_token,
                                         const RdpBridgeCallbacks* callbacks) {
     if (!args || argc < 1 || !callbacks) return NULL;
-    pthread_once(&g_logging_once, bridge_init_logging);
+    bridge_once(&g_logging_once, bridge_init_logging);
 
     RdpBridgeContext* bridge = (RdpBridgeContext*)calloc(1, sizeof(RdpBridgeContext));
     if (!bridge) return NULL;
@@ -1187,9 +1256,9 @@ RdpBridgeContext* freerdp_bridge_create(const char* const* args, int argc,
     ep.ClientStart = bridge_client_start;
     ep.ClientStop = bridge_client_stop;
 
-    pthread_mutex_lock(&g_context_lock);
+    bridge_mutex_lock(&g_context_lock);
     rdpContext* ctx = freerdp_client_context_new(&ep);
-    pthread_mutex_unlock(&g_context_lock);
+    bridge_mutex_unlock(&g_context_lock);
     if (!ctx) {
         free(bridge);
         return NULL;
@@ -1226,9 +1295,9 @@ void freerdp_bridge_free(RdpBridgeContext* ctx) {
     /* Joining the session thread can take a while; don't hold the global lock for it. */
     freerdp_bridge_stop(ctx);
     if (ctx->rdp_ctx) {
-        pthread_mutex_lock(&g_context_lock);
+        bridge_mutex_lock(&g_context_lock);
         freerdp_client_context_free(ctx->rdp_ctx);
-        pthread_mutex_unlock(&g_context_lock);
+        bridge_mutex_unlock(&g_context_lock);
     }
     free(ctx);
 }
@@ -1237,10 +1306,10 @@ void freerdp_bridge_provide_token_request(RdpBridgeContext* ctx, const char* tok
     if (!ctx || !ctx->rdp_ctx) return;
     BridgeClientContext* bctx = (BridgeClientContext*)ctx->rdp_ctx;
     char* copy = token_request ? _strdup(token_request) : NULL;
-    pthread_mutex_lock(&bctx->auth_lock);
+    bridge_mutex_lock(&bctx->auth_lock);
     char* old = bctx->token_request;
     bctx->token_request = copy;
-    pthread_mutex_unlock(&bctx->auth_lock);
+    bridge_mutex_unlock(&bctx->auth_lock);
     bridge_free_secret(old);
     SetEvent(bctx->auth_done_event);
 }
@@ -1251,9 +1320,9 @@ void freerdp_bridge_answer_certificate(RdpBridgeContext* ctx, int decision) {
     if (decision != RDP_BRIDGE_CERT_ACCEPT && decision != RDP_BRIDGE_CERT_ACCEPT_ONCE) {
         decision = RDP_BRIDGE_CERT_REJECT;
     }
-    pthread_mutex_lock(&bctx->auth_lock);
+    bridge_mutex_lock(&bctx->auth_lock);
     bctx->cert_answer = decision;
-    pthread_mutex_unlock(&bctx->auth_lock);
+    bridge_mutex_unlock(&bctx->auth_lock);
     SetEvent(bctx->cert_done_event);
 }
 
@@ -1349,12 +1418,12 @@ void freerdp_bridge_request_layout(RdpBridgeContext* ctx, const RdpBridgeMonitor
         l->DeviceScaleFactor = device_scale;
     }
 
-    pthread_mutex_lock(&bctx->work_lock);
+    bridge_mutex_lock(&bctx->work_lock);
     memcpy(bctx->pending_layout, layout, sizeof(layout));
     bctx->pending_count = count;
     bctx->resize_pending = TRUE;
     bctx->layout_resent = FALSE;
-    pthread_mutex_unlock(&bctx->work_lock);
+    bridge_mutex_unlock(&bctx->work_lock);
     SetEvent(bctx->work_event);
 }
 
@@ -1368,10 +1437,10 @@ void freerdp_bridge_announce_clipboard(RdpBridgeContext* ctx, uint32_t kind) {
     if (!ctx || !ctx->rdp_ctx) return;
     BridgeClientContext* bctx = (BridgeClientContext*)ctx->rdp_ctx;
     if (kind > RDP_BRIDGE_LOCAL_FILES) kind = RDP_BRIDGE_LOCAL_NONE;
-    pthread_mutex_lock(&bctx->work_lock);
+    bridge_mutex_lock(&bctx->work_lock);
     bctx->local_clip_kind = kind;
     bctx->clipboard_pending = TRUE;
-    pthread_mutex_unlock(&bctx->work_lock);
+    bridge_mutex_unlock(&bctx->work_lock);
     SetEvent(bctx->work_event);
 }
 
@@ -1382,7 +1451,7 @@ bool freerdp_bridge_request_file_contents(RdpBridgeContext* ctx, uint32_t stream
     if (flags != FILECONTENTS_SIZE && flags != FILECONTENTS_RANGE) return false;
     if (flags == FILECONTENTS_SIZE && (size != sizeof(UINT64) || position != 0)) return false;
     BridgeClientContext* bctx = (BridgeClientContext*)ctx->rdp_ctx;
-    pthread_mutex_lock(&bctx->work_lock);
+    bridge_mutex_lock(&bctx->work_lock);
     const BOOL queued = bctx->cliprdr && bctx->file_request_count < MAX_FILE_REQUESTS;
     if (queued) {
         BridgeFileRequest* r = &bctx->file_requests[bctx->file_request_count++];
@@ -1392,7 +1461,7 @@ bool freerdp_bridge_request_file_contents(RdpBridgeContext* ctx, uint32_t stream
         r->position = position;
         r->size = size;
     }
-    pthread_mutex_unlock(&bctx->work_lock);
+    bridge_mutex_unlock(&bctx->work_lock);
     if (queued) SetEvent(bctx->work_event);
     return queued;
 }

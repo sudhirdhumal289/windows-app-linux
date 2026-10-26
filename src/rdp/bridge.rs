@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -1048,6 +1048,26 @@ pub fn supports_surface_protection() -> bool {
     parse_version(&version()).is_some_and(|v| v >= SURFACE_PROTECTION_VERSION)
 }
 
+/// Whether the engine was built with H.264 graphics-pipeline support (`/gfx:AVC444`).
+/// Distribution packages built without FFmpeg or OpenH264 (e.g. Ubuntu) reject AVC modes.
+#[must_use]
+pub fn supports_h264() -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        // SAFETY: returns a static NUL-terminated string (or NULL).
+        let config = unsafe { opt_string(ffi::freerdp_bridge_build_config()) };
+        config.is_some_and(|c| build_option_enabled(&c, "WITH_GFX_H264"))
+    })
+}
+
+/// Whether `option` is `ON` in a FreeRDP build configuration string.
+fn build_option_enabled(config: &str, option: &str) -> bool {
+    config
+        .split_whitespace()
+        .filter_map(|entry| entry.split_once('='))
+        .any(|(key, value)| key == option && value.eq_ignore_ascii_case("ON"))
+}
+
 /// One embedded FreeRDP session.
 ///
 /// Input methods may be called from any thread and are ignored while not connected.
@@ -1499,6 +1519,16 @@ mod tests {
             null_sink()
         )
         .is_err());
+    }
+
+    #[test]
+    fn build_options_are_parsed() {
+        let config = "WITH_FFMPEG=OFF WITH_GFX_H264=ON WITH_GFX_H264_AVAILABLE=1";
+        assert!(build_option_enabled(config, "WITH_GFX_H264"));
+        assert!(!build_option_enabled(config, "WITH_FFMPEG"));
+        assert!(!build_option_enabled(config, "WITH_OPENH264"));
+        assert!(!build_option_enabled("WITH_GFX_H264=OFF", "WITH_GFX_H264"));
+        let _ = supports_h264();
     }
 
     #[test]

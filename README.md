@@ -84,7 +84,7 @@ The application directly interoperates with Microsoft Cloud PC and Entra ID endp
   - Audio, microphone, camera and shared-folder redirection, configured in Preferences: the home or a chosen folder, **more shared folders**, and **removable drives** (USB sticks plugged in during the session appear too).
   - **Connection quality** presets (Automatic, LAN, Broadband, Low Bandwidth) in Preferences or per connection.
   - **Use All Monitors** in fullscreen (one remote monitor per local monitor, MS-RDPEDISP layout).
-  - Graphics pipeline with H.264 (AVC444/AVC420) and RemoteFX fallback, selectable in Preferences. Cloud PC and AVD sessions use RemoteFX when FreeRDP is older than 3.27, which cannot display hosts with screen-capture protection.
+  - Graphics pipeline with H.264 (AVC444/AVC420) and RemoteFX fallback, selectable in Preferences. When FreeRDP is built without H.264 (e.g. Ubuntu's packages), the pipeline is negotiated without AVC codecs. Cloud PC and AVD sessions use RemoteFX when FreeRDP is older than 3.27, which cannot display hosts with screen-capture protection.
   - USB device (`/usb`, needs a udev rule granting access to the device node), smart card and printer redirection.
   - Live connection-quality indicator (round-trip time and bandwidth from network auto-detect) in the session header and dock.
   - Session-host sign-in reuses the app's SSO silently and only shows a window when interaction is needed.
@@ -209,13 +209,19 @@ The AppKit frontend only needs FreeRDP and the Xcode command line tools:
 xcode-select --install
 brew install freerdp pkg-config
 ```
+`scripts/package-macos.sh` copies FreeRDP and every Homebrew library it depends on into
+the app's `Contents/Frameworks` (via `scripts/bundle-macos-dylibs.py`) and re-signs them,
+so the packaged app runs on Macs without Homebrew.
 
 #### Windows
 Install Rust with the MSVC toolchain, [vcpkg](https://vcpkg.io) and pkgconf, then FreeRDP:
 ```powershell
-vcpkg install freerdp:x64-windows pkgconf
+vcpkg install "freerdp[client]:x64-windows" pkgconf:x64-windows
+$env:PKG_CONFIG = "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf\pkgconf.exe"
 $env:PKG_CONFIG_PATH = "$env:VCPKG_ROOT\installed\x64-windows\lib\pkgconfig"
+$env:PATH += ";$env:VCPKG_ROOT\installed\x64-windows\bin"   # FreeRDP DLLs for cargo run/test
 ```
+The `client` feature is required: vcpkg's `freerdp` port builds no client library by default.
 The app needs the [Windows App SDK runtime](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)
 and the WebView2 runtime (preinstalled on Windows 11).
 
@@ -318,7 +324,7 @@ When packages are installed, the respective package managers resolve and install
 | **Fedora / RHEL** | `gtk4 >= 4.14`, `libadwaita >= 1.5`, `webkitgtk6.0 >= 2.42`, `libsoup3 >= 3.0`, `freerdp-libs >= 3.0` |
 | **openSUSE** | `gtk4 >= 4.14`, `libadwaita-1-0 >= 1.5`, `libwebkit2gtk-6_0-4 >= 2.42`, `libsoup-3_0-0 >= 3.0`, `freerdp >= 3.0` |
 | **Arch Linux / Manjaro** | `gtk4`, `libadwaita`, `webkitgtk-6.0`, `libsoup3`, `freerdp` |
-| **macOS** | `freerdp` (Homebrew) |
+| **macOS** | None (FreeRDP and its dependencies are bundled in `Contents/Frameworks`) |
 | **Windows** | Windows App SDK runtime, WebView2 runtime (FreeRDP DLLs are bundled) |
 
 ### 3. Installing Generated Packages
@@ -342,6 +348,12 @@ sudo zypper install ./target/packages/windows-app-linux-*.rpm
 ```bash
 sudo pacman -U ./target/packages/windows-app-linux-*-x86_64.pkg.tar.zst
 ```
+
+#### macOS
+Open `windows-app-macos.dmg` and drag **Windows App** to Applications. CI builds are
+ad-hoc signed, not notarized, so macOS blocks the first launch of a downloaded copy: allow
+it under **System Settings → Privacy & Security → Open Anyway**, or run
+`xattr -dr com.apple.quarantine "/Applications/Windows App.app"`.
 
 ---
 

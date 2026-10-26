@@ -33,6 +33,11 @@ cp "${BIN_SRC}" "${MACOS_DIR}/windows-app-linux"
 chmod 755 "${MACOS_DIR}/windows-app-linux"
 cp "${ROOT_DIR}/packaging/macos/Info.plist" "${CONTENTS_DIR}/"
 
+# FreeRDP and its dependencies come from Homebrew; copy them into Contents/Frameworks so
+# the app starts on Macs without those packages.
+echo "==> Bundling FreeRDP and dependent libraries..."
+python3 "${SCRIPT_DIR}/bundle-macos-dylibs.py" "${MACOS_DIR}/windows-app-linux"
+
 # App icon: packaging/macos/AppIcon.appiconset holds every size iconutil expects.
 if command -v iconutil >/dev/null 2>&1; then
     ICONSET_DIR="${ROOT_DIR}/target/macos-bundle/AppIcon.iconset"
@@ -45,12 +50,17 @@ else
     cp "${ROOT_DIR}/packaging/macos/AppIcon.appiconset/icon_512x512@2x.png" "${RESOURCES_DIR}/AppIcon.png"
 fi
 
-# Ad-hoc signature with the app's entitlements (network client, keychain); replace "-"
-# with a Developer ID identity for distribution.
+# Rewriting the libraries invalidated their signatures, and Apple silicon refuses to load
+# unsigned code: sign the nested libraries first, then the app with its entitlements.
+# Ad-hoc ("-") by default; set CODESIGN_IDENTITY to a Developer ID for distribution.
 if command -v codesign >/dev/null 2>&1; then
-    codesign --force --deep --options runtime \
+    IDENTITY="${CODESIGN_IDENTITY:--}"
+    find "${CONTENTS_DIR}/Frameworks" -type f -name '*.dylib' -print0 |
+        xargs -0 codesign --force --options runtime --sign "${IDENTITY}"
+    codesign --force --options runtime \
         --entitlements "${ROOT_DIR}/packaging/macos/WindowsApp.entitlements" \
-        --sign "${CODESIGN_IDENTITY:--}" "${BUNDLE_DIR}"
+        --sign "${IDENTITY}" "${BUNDLE_DIR}"
+    codesign --verify --deep --strict --verbose=2 "${BUNDLE_DIR}"
 fi
 
 # DMG or Tarball packaging

@@ -868,6 +868,8 @@ mod tests {
         assert_eq!(decode_file_list(&0u32.to_le_bytes()), Some(vec![]));
     }
 
+    // Symlinks and `:` in file names are Unix-only.
+    #[cfg(unix)]
     #[test]
     fn collects_encodes_and_serves_local_files() {
         let tmp = TempDir::new();
@@ -970,9 +972,12 @@ mod tests {
         for bad in ["", "../x", "a/../../x", "/etc/passwd", "a//b", "."] {
             assert!(safe_target(root, bad, false).is_err(), "{bad:?}");
         }
-        std::os::unix::fs::symlink(&outside.0, root.join("link")).unwrap();
-        assert!(safe_target(root, "link/file", false).is_err());
-        assert!(safe_target(root, "link", true).is_err());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside.0, root.join("link")).unwrap();
+            assert!(safe_target(root, "link/file", false).is_err());
+            assert!(safe_target(root, "link", true).is_err());
+        }
         fs::write(root.join("plain"), b"").unwrap();
         assert!(safe_target(root, "plain/file", false).is_err());
         assert_eq!(fs::read_dir(&outside.0).unwrap().count(), 0);

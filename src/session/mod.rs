@@ -147,6 +147,9 @@ pub struct SessionOptions {
     /// The engine handles protected (screen-capture protection) graphics-pipeline
     /// surfaces, which Cloud PC and Azure Virtual Desktop hosts may send.
     pub gfx_surface_protection: bool,
+    /// The engine supports H.264 (AVC444) in the graphics pipeline; otherwise the
+    /// pipeline is negotiated without AVC codecs.
+    pub gfx_h264: bool,
     pub usb_devices: Vec<UsbId>,
     pub smartcard: bool,
     pub printers: bool,
@@ -178,6 +181,7 @@ impl SessionOptions {
             username: username.filter(|u| !u.trim().is_empty()),
             graphics: GraphicsMode::from_id(&config.graphics_mode),
             gfx_surface_protection: crate::rdp::supports_surface_protection(),
+            gfx_h264: crate::rdp::supports_h264(),
             usb_devices: config
                 .usb_devices
                 .iter()
@@ -399,6 +403,16 @@ fn use_graphics_pipeline(target: &Target<'_>, opts: &SessionOptions) -> bool {
     }
 }
 
+/// Audio output/input channel argument. Linux uses PulseAudio (also served by PipeWire);
+/// elsewhere FreeRDP picks the platform backend (WinMM on Windows, Core Audio on macOS).
+fn audio_arg(channel: &str) -> String {
+    if cfg!(target_os = "linux") {
+        format!("/{channel}:sys:pulse")
+    } else {
+        format!("/{channel}")
+    }
+}
+
 fn build_args(target: &Target<'_>, opts: &SessionOptions) -> Vec<String> {
     let mut args = vec!["freerdp".to_string()];
     match target {
@@ -432,10 +446,12 @@ fn build_args(target: &Target<'_>, opts: &SessionOptions) -> Vec<String> {
         .to_string(),
         format!("/scale-desktop:{scale}"),
         format!("/scale-device:{}", device_scale_for(scale)),
-        if use_graphics_pipeline(target, opts) {
+        if !use_graphics_pipeline(target, opts) {
+            "/rfx"
+        } else if opts.gfx_h264 {
             "/gfx:AVC444"
         } else {
-            "/rfx"
+            "/gfx"
         }
         .to_string(),
         // `auto` lets the host measure bandwidth and latency (shown as connection
@@ -451,10 +467,10 @@ fn build_args(target: &Target<'_>, opts: &SessionOptions) -> Vec<String> {
         .to_string(),
     ]);
     if opts.audio {
-        args.push("/sound:sys:pulse".to_string());
+        args.push(audio_arg("sound"));
     }
     if opts.microphone {
-        args.push("/microphone:sys:pulse".to_string());
+        args.push(audio_arg("microphone"));
     }
     if opts.camera {
         args.push("/dvc:rdpecam".to_string());
@@ -700,6 +716,7 @@ mod tests {
             username: Some("a@b.com".into()),
             graphics: GraphicsMode::Auto,
             gfx_surface_protection: true,
+            gfx_h264: true,
             usb_devices: vec![
                 UsbId::parse("046D:C52B").unwrap(),
                 UsbId::parse("1050:0407").unwrap(),
@@ -721,7 +738,6 @@ mod tests {
             "/scale-device:140",
             "+clipboard",
             "+auto-reconnect",
-            "/sound:sys:pulse",
             "/dvc:rdpecam",
             "/drive:Shared,/home/u/Shared Docs",
             "/u:a@b.com",
@@ -733,6 +749,7 @@ mod tests {
         ] {
             assert!(args.iter().any(|a| a == expected), "missing {expected}");
         }
+        assert!(args.contains(&audio_arg("sound")));
         assert!(!args.iter().any(|a| a.starts_with("/microphone")));
     }
 
@@ -781,6 +798,17 @@ mod tests {
         let conn = SavedConnection::new("", "host", "").unwrap();
         let args = build_direct_args(&conn, &Credentials::default(), &o).unwrap();
         assert!(args.contains(&"/gfx:AVC444".to_string()));
+    }
+
+    #[test]
+    fn graphics_pipeline_without_h264() {
+        let o = SessionOptions {
+            gfx_h264: false,
+            ..opts()
+        };
+        let args = build_freerdp_args(Path::new("f.rdp"), "T", &o);
+        assert!(args.contains(&"/gfx".to_string()));
+        assert!(!args.iter().any(|a| a.starts_with("/gfx:") || a == "/rfx"));
     }
 
     #[test]

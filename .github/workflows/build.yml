@@ -46,13 +46,27 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # vcpkg binary cache: FreeRDP and OpenSSL take ~15 minutes to build from source.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-cache
+          key: vcpkg-x64-windows-freerdp-client-${{ hashFiles('.github/workflows/build.yml') }}
+          restore-keys: vcpkg-x64-windows-freerdp-client-
       - name: Install FreeRDP (vcpkg)
         shell: pwsh
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install freerdp:x64-windows pkgconf:x64-windows
+          New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
+          # The freerdp port has no default features; `client` provides freerdp-client3.
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "freerdp[client]:x64-windows" pkgconf:x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
-          "PKG_CONFIG=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\tools\pkgconf\pkgconf.exe" >> $env:GITHUB_ENV
-          "PKG_CONFIG_PATH=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+          "PKG_CONFIG=$installed\tools\pkgconf\pkgconf.exe" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$installed\lib\pkgconfig" >> $env:GITHUB_ENV
+          # FreeRDP DLLs for the test binaries (Windows has no rpath).
+          "$installed\bin" >> $env:GITHUB_PATH
       - run: cargo clippy --no-default-features --features winui
       - run: cargo test --lib --no-default-features --features winui
       - name: Package (.zip)
@@ -82,3 +96,17 @@ jobs:
         with:
           name: windows-app-macos
           path: target/packages/windows-app-macos.*
+      # The bundle must not depend on Homebrew: hide FreeRDP and check the app stays up.
+      - name: Smoke test bundle without Homebrew FreeRDP
+        run: |
+          mv "$(brew --prefix)/Cellar/freerdp" "$RUNNER_TEMP/freerdp-hidden"
+          "target/macos-bundle/Windows App.app/Contents/MacOS/windows-app-linux" &
+          pid=$!
+          sleep 10
+          if ! kill -0 "$pid" 2>/dev/null; then
+            status=0
+            wait "$pid" || status=$?
+            echo "::error::Windows App exited during launch (status $status)"
+            exit 1
+          fi
+          kill "$pid"
