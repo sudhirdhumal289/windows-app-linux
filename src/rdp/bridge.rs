@@ -1060,6 +1060,15 @@ pub fn supports_h264() -> bool {
     })
 }
 
+/// Whether the engine includes the USB redirection channel (`urbdrc`). Builds without it,
+/// such as vcpkg's default `freerdp[client]`, reject `/usb` and every session using it.
+#[must_use]
+pub fn supports_usb_redirection() -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    // SAFETY: the option is a NUL-terminated string that outlives the call.
+    *SUPPORTED.get_or_init(|| unsafe { ffi::freerdp_bridge_accepts_option(c"/usb:auto".as_ptr()) })
+}
+
 /// Whether `option` is `ON` in a FreeRDP build configuration string.
 fn build_option_enabled(config: &str, option: &str) -> bool {
     config
@@ -1428,6 +1437,35 @@ mod tests {
     }
 
     #[test]
+    fn freerdp_accepts_drive_paths_ending_in_backslash() {
+        let _guard = lock(&TEST_LOCK);
+        // On Windows a directory path with a trailing separator; elsewhere a directory
+        // whose name ends in a backslash.
+        let dir = std::env::temp_dir().join(format!("wal-drive-{}\\", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let config = crate::AppConfig {
+            enable_drive_redirection: true,
+            shared_folder_path: dir.display().to_string(),
+            ..crate::AppConfig::default()
+        };
+        let opts = crate::session::SessionOptions::from_config(&config, 1280, 720, 100, None);
+        let connection = crate::connections::SavedConnection::new("", "127.0.0.1", "").unwrap();
+        let args = crate::session::build_direct_args(
+            &connection,
+            &crate::session::Credentials::default(),
+            &opts,
+        )
+        .unwrap();
+        let result = NativeRdpBridge::new(&args, BridgeOptions::default(), null_sink());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            args.iter().any(|a| a.starts_with("/drive:Shared,")),
+            "{args:?}"
+        );
+        assert!(result.is_ok(), "{args:?}");
+    }
+
+    #[test]
     fn freerdp_accepts_direct_session_arguments() {
         let _guard = lock(&TEST_LOCK);
         for address in ["127.0.0.1:3390", "[::1]", "localhost"] {
@@ -1529,6 +1567,19 @@ mod tests {
         assert!(!build_option_enabled(config, "WITH_OPENH264"));
         assert!(!build_option_enabled("WITH_GFX_H264=OFF", "WITH_GFX_H264"));
         let _ = supports_h264();
+    }
+
+    #[test]
+    fn probes_command_line_options() {
+        // SAFETY: NUL-terminated literals.
+        unsafe {
+            assert!(ffi::freerdp_bridge_accepts_option(c"/smartcard".as_ptr()));
+            assert!(!ffi::freerdp_bridge_accepts_option(
+                c"/not-a-real-option".as_ptr()
+            ));
+            assert!(!ffi::freerdp_bridge_accepts_option(std::ptr::null()));
+        }
+        let _ = supports_usb_redirection();
     }
 
     #[test]

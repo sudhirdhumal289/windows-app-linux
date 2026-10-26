@@ -59,7 +59,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
           # The freerdp port has no default features; `client` provides freerdp-client3.
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "freerdp[client]:x64-windows" pkgconf:x64-windows
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install "freerdp[client,urbdrc]:x64-windows" pkgconf:x64-windows
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
           "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV

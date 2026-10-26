@@ -1,7 +1,7 @@
 # Builds the WinUI 3 frontend and stages a portable folder plus a .zip in target\packages.
 #
 # Requirements: Rust (MSVC toolchain), FreeRDP 3 from vcpkg
-# (`vcpkg install "freerdp[client]:x64-windows" pkgconf:x64-windows`) with PKG_CONFIG set, and the Windows App SDK runtime installed on the machine that runs the
+# (`vcpkg install "freerdp[client,urbdrc]:x64-windows" pkgconf:x64-windows`) with PKG_CONFIG set, and the Windows App SDK runtime installed on the machine that runs the
 # app (https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads).
 #
 # Usage: .\scripts\package-windows.ps1 [-VcpkgRoot C:\vcpkg]

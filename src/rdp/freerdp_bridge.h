@@ -149,6 +149,10 @@ const char* freerdp_bridge_version(void);
 /* FreeRDP build configuration (space separated `OPTION=VALUE` entries). */
 const char* freerdp_bridge_build_config(void);
 
+/* Whether this FreeRDP build's command line accepts `option` (e.g. "/usb:auto"); options
+ * of channels that were not compiled in are unknown and would fail the whole session. */
+bool freerdp_bridge_accepts_option(const char* option);
+
 /* Parses `args` (argv[0] included) like the FreeRDP command line. Returns NULL on failure. */
 RdpBridgeContext* freerdp_bridge_create(const char* const* args, int argc,
                                         const char* gateway_token,

@@ -1,7 +1,7 @@
 //! Compiles the FreeRDP C glue (`src/rdp/freerdp_bridge.c`) against FreeRDP 3 found via
 //! pkg-config. A FreeRDP tree bundled at `./freerdp-3.32` (see `scripts/fetch-freerdp.sh`)
 //! takes precedence over the system libraries. On macOS FreeRDP comes from Homebrew
-//! (`brew install freerdp`), on Windows from vcpkg (`vcpkg install "freerdp[client]"`) with pkgconf.
+//! (`brew install freerdp`), on Windows from vcpkg (`vcpkg install "freerdp[client,urbdrc]"`) with pkgconf.
 //!
 //! For the WinUI frontend on MSVC the application manifest is embedded in the executable.
 //!

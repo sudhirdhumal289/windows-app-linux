@@ -182,11 +182,7 @@ impl SessionOptions {
             graphics: GraphicsMode::from_id(&config.graphics_mode),
             gfx_surface_protection: crate::rdp::supports_surface_protection(),
             gfx_h264: crate::rdp::supports_h264(),
-            usb_devices: config
-                .usb_devices
-                .iter()
-                .filter_map(|id| UsbId::parse(id))
-                .collect(),
+            usb_devices: usb_devices(config),
             smartcard: config.enable_smartcard,
             printers: config.enable_printers,
         }
@@ -208,6 +204,34 @@ impl SessionOptions {
 
 /// Folders from the preferences that can be shared: the main shared folder (as
 /// `Shared`) and the extra folders, skipping missing ones and repeated names.
+/// USB devices to redirect, or none when the engine lacks the USB redirection channel.
+fn usb_devices(config: &AppConfig) -> Vec<UsbId> {
+    let devices: Vec<UsbId> = config
+        .usb_devices
+        .iter()
+        .filter_map(|id| UsbId::parse(id))
+        .collect();
+    if !devices.is_empty() && !crate::rdp::supports_usb_redirection() {
+        log::warn!("Not redirecting USB devices: FreeRDP was built without USB redirection");
+        return Vec::new();
+    }
+    devices
+}
+
+/// A drive path for FreeRDP's comma-separated `/drive` option. Its parser treats `\` as an
+/// escape, so a trailing one (`C:\`, `%TEMP%` on Windows) would swallow the end of the
+/// option and fail the session; the same directory is named with a trailing `.` instead.
+fn drive_path_arg(path: &Path) -> String {
+    let mut value = path.display().to_string();
+    if value.ends_with('\\') {
+        if !cfg!(windows) {
+            value.push('/');
+        }
+        value.push('.');
+    }
+    value
+}
+
 fn shared_drives(config: &AppConfig) -> Vec<DriveShare> {
     if !config.enable_drive_redirection {
         return Vec::new();
@@ -479,7 +503,11 @@ fn build_args(target: &Target<'_>, opts: &SessionOptions) -> Vec<String> {
         args.push("/bpp:16".to_string());
     }
     for drive in &opts.drives {
-        args.push(format!("/drive:{},{}", drive.name, drive.path.display()));
+        args.push(format!(
+            "/drive:{},{}",
+            drive.name,
+            drive_path_arg(&drive.path)
+        ));
     }
     if opts.hotplug_drives {
         args.push("/drive:hotplug,*".to_string());
@@ -1000,7 +1028,19 @@ mod tests {
             ..AppConfig::default()
         };
         let o = SessionOptions::from_config(&config, 800, 600, 100, None);
-        assert_eq!(o.usb_devices.len(), 1);
+        let expected = usize::from(crate::rdp::supports_usb_redirection());
+        assert_eq!(o.usb_devices.len(), expected);
+    }
+
+    #[test]
+    fn drive_paths_never_end_in_an_escape() {
+        assert_eq!(
+            drive_path_arg(Path::new("/home/u/Shared")),
+            "/home/u/Shared"
+        );
+        let expected = if cfg!(windows) { r"C:\." } else { r"C:\/." };
+        assert_eq!(drive_path_arg(Path::new(r"C:\")), expected);
+        assert_eq!(drive_path_arg(Path::new(r"C:\Temp")), r"C:\Temp");
     }
 
     #[test]

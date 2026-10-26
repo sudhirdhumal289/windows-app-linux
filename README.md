@@ -216,12 +216,13 @@ so the packaged app runs on Macs without Homebrew.
 #### Windows
 Install Rust with the MSVC toolchain, [vcpkg](https://vcpkg.io) and pkgconf, then FreeRDP:
 ```powershell
-vcpkg install "freerdp[client]:x64-windows" pkgconf:x64-windows
+vcpkg install "freerdp[client,urbdrc]:x64-windows" pkgconf:x64-windows
 $env:PKG_CONFIG = "$env:VCPKG_ROOT\installed\x64-windows\tools\pkgconf\pkgconf.exe"
 $env:PKG_CONFIG_PATH = "$env:VCPKG_ROOT\installed\x64-windows\lib\pkgconfig"
 $env:PATH += ";$env:VCPKG_ROOT\installed\x64-windows\bin"   # FreeRDP DLLs for cargo run/test
 ```
-The `client` feature is required: vcpkg's `freerdp` port builds no client library by default.
+The `client` feature is required (vcpkg's `freerdp` port builds no client library by default);
+`urbdrc` adds USB redirection, which the app turns off when FreeRDP lacks it.
 The app needs the [Windows App SDK runtime](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)
 and the WebView2 runtime (preinstalled on Windows 11).
 

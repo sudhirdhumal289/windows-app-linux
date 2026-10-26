@@ -125,6 +125,7 @@ extern "C" {
     pub(super) fn freerdp_bridge_version() -> *const c_char;
 
     pub(super) fn freerdp_bridge_build_config() -> *const c_char;
+    pub(super) fn freerdp_bridge_accepts_option(option: *const c_char) -> bool;
 
     pub(super) fn freerdp_bridge_create(
         args: *const *const c_char,

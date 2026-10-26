@@ -2,3 +2,4 @@ target/
 *.msix
 .cargo/
 freerdp-3.32/
+ui/

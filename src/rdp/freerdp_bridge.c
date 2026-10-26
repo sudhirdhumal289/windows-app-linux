@@ -1182,6 +1182,23 @@ const char* freerdp_bridge_build_config(void) {
     return freerdp_get_build_config();
 }
 
+bool freerdp_bridge_accepts_option(const char* option) {
+    if (!option) return false;
+    rdpSettings* settings = freerdp_settings_new(0);
+    if (!settings) return false;
+    char program[] = "freerdp";
+    char server[] = "/v:localhost";
+    char* arg = _strdup(option);
+    bool ok = false;
+    if (arg) {
+        char* argv[] = { program, server, arg, NULL };
+        ok = freerdp_client_settings_parse_command_line(settings, 3, argv, FALSE) == 0;
+    }
+    free(arg);
+    freerdp_settings_free(settings);
+    return ok;
+}
+
 static BOOL bridge_parse_args(rdpContext* ctx, const char* const* args, int argc) {
     /* FreeRDP may rewrite argv in place (e.g. to mask passwords), so hand it private copies. */
     char** argv = (char**)calloc((size_t)argc + 1, sizeof(char*));
