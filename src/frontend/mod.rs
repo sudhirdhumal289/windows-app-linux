@@ -10,10 +10,29 @@
 //!   pointer helpers in [`crate::rdp::input`] and [`crate::rdp::keymap`])
 //! * host queries: [`crate::platform`]
 //!
-//! To add a frontend (e.g. WinUI on Windows or AppKit on macOS), add a sibling module
-//! behind its own Cargo feature that provides the same screens as [`gtk`]: the Cloud PC
-//! list, the sign-in web view, the session-host sign-in ([`crate::rdp::BridgeEvent::AuthRequired`])
-//! and a session window that renders [`crate::rdp::Frame`] and forwards input.
+//! * what the main window shows, connection preparation, the session controller, web-view
+//!   sign-in and all user-facing text: [`common`]
+//!
+//! Three frontends exist, each behind its own Cargo feature and each following its
+//! platform's design guidelines:
+//!
+//! | Feature  | Module   | Toolkit                                   | Platform |
+//! |----------|----------|-------------------------------------------|----------|
+//! | `gtk`    | `gtk`    | GTK 4 + libadwaita (GNOME HIG)            | Linux    |
+//! | `winui`  | `winui`  | WinUI 3 via `windows-reactor` (Fluent)    | Windows  |
+//! | `appkit` | `appkit` | AppKit via `objc2` (Human Interface Guidelines) | macOS |
+//!
+//! Each provides the same screens: the connection library, the sign-in web view, the
+//! session-host sign-in ([`crate::rdp::BridgeEvent::AuthRequired`]) and a session window
+//! that renders [`crate::rdp::Frame`] and forwards input.
+
+pub mod common;
 
 #[cfg(feature = "gtk")]
 pub mod gtk;
+
+#[cfg(all(windows, feature = "winui"))]
+pub mod winui;
+
+#[cfg(all(target_os = "macos", feature = "appkit"))]
+pub mod appkit;

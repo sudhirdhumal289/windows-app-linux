@@ -11,7 +11,13 @@ use crate::api::{self, AvdResource, CloudPcService, Snapshot, TroubleshootOutcom
 use crate::auth::{account, Account, AuthManager};
 use crate::config::AppConfig;
 use crate::connections::{self, ConnectionStore, SavedConnection};
-use crate::error::AppError;
+use crate::frontend::common::library::{
+    SearchFilter, SECTION_AVD, SECTION_CLOUD_PCS, SECTION_REMOTE_PCS,
+};
+use crate::frontend::common::text::{
+    format_time, join_names, load_error_message, load_summary, or_not_reported, read_rdp_file,
+    sanitize_file_name, snapshot_label, REPOSITORY_URL,
+};
 use crate::history::{self, RecentStore};
 use crate::launcher::{LaunchEntry, LaunchTarget, SearchIndex};
 use crate::models::{CloudPc, CloudPcAction};
@@ -32,13 +38,6 @@ use std::sync::Arc;
 /// Logical size of a new session window; the remote desktop follows the real size.
 const SESSION_WIDTH: u32 = 1280;
 const SESSION_HEIGHT: u32 = 800;
-
-/// Ids of the main window sections, remembered in [`AppConfig::collapsed_sections`].
-const SECTION_CLOUD_PCS: &str = "cloud-pcs";
-const SECTION_AVD: &str = "avd";
-const SECTION_REMOTE_PCS: &str = "remote-pcs";
-
-const REPOSITORY_URL: &str = "https://github.com/sudhirdhumal289/windows-app-linux";
 
 pub struct AppMainWindow {
     window: adw::ApplicationWindow,
@@ -2094,99 +2093,6 @@ impl AppMainWindow {
     }
 }
 
-/// Local, human-readable time for an RFC 3339 timestamp (unparsable values as-is).
-fn format_time(value: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(value).map_or_else(
-        |_| value.to_string(),
-        |t| {
-            t.with_timezone(&chrono::Local)
-                .format("%e %b %Y, %H:%M")
-                .to_string()
-                .trim()
-                .to_string()
-        },
-    )
-}
-
-fn snapshot_label(snapshot: &Snapshot) -> String {
-    let when = snapshot
-        .created_date_time
-        .as_deref()
-        .map_or_else(|| snapshot.id.clone(), format_time);
-    match snapshot.snapshot_type.as_deref() {
-        Some("manual") => format!("{when} (manual)"),
-        _ => when,
-    }
-}
-
-fn load_summary(pcs: usize, avd: usize) -> String {
-    let plural = |n: usize, one: &str, many: &str| {
-        if n == 1 {
-            format!("1 {one}")
-        } else {
-            format!("{n} {many}")
-        }
-    };
-    match (pcs, avd) {
-        (0, 0) => "No Cloud PCs or Azure Virtual Desktop resources are assigned to this account."
-            .to_string(),
-        (pcs, 0) => format!("Loaded {}", plural(pcs, "Cloud PC", "Cloud PCs")),
-        (0, avd) => format!(
-            "Loaded {}",
-            plural(avd, "desktop or app", "desktops and apps")
-        ),
-        (pcs, avd) => format!(
-            "Loaded {} and {}",
-            plural(pcs, "Cloud PC", "Cloud PCs"),
-            plural(avd, "desktop or app", "desktops and apps")
-        ),
-    }
-}
-
-fn or_not_reported(value: Option<&String>) -> String {
-    value
-        .filter(|v| !v.trim().is_empty())
-        .cloned()
-        .unwrap_or_else(|| "Not reported".to_string())
-}
-
-/// Short, user-facing message for a failed Cloud PC listing.
-fn load_error_message(error: &AppError) -> String {
-    match error {
-        AppError::GraphApi { status, message } => {
-            serde_json::from_str::<serde_json::Value>(message)
-                .ok()
-                .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
-                .map_or_else(
-                    || format!("Unable to load Cloud PCs (HTTP {status})"),
-                    |m| format!("Unable to load Cloud PCs: {m}"),
-                )
-        }
-        _ => format!("Unable to load Cloud PCs: {error}"),
-    }
-}
-
-/// Case-insensitive search terms; a connection matches when every term appears in one
-/// of its fields.
-struct SearchFilter(Vec<String>);
-
-impl SearchFilter {
-    fn new(text: &str) -> Self {
-        Self(text.split_whitespace().map(str::to_lowercase).collect())
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    fn matches(&self, fields: &[&str]) -> bool {
-        let fields: Vec<String> = fields.iter().map(|f| f.to_lowercase()).collect();
-        self.0
-            .iter()
-            .all(|term| fields.iter().any(|field| field.contains(term.as_str())))
-    }
-}
-
 /// Vertical box holding the main window sections.
 fn sections_box() -> Box {
     let sections = Box::new(Orientation::Vertical, 18);
@@ -2203,15 +2109,6 @@ fn chevron_icon(expanded: bool) -> &'static str {
         "pan-down-symbolic"
     } else {
         "pan-end-symbolic"
-    }
-}
-
-/// "A", "A and B", "A, B and C".
-fn join_names(names: &[String]) -> String {
-    match names {
-        [] => String::new(),
-        [only] => only.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -2233,44 +2130,4 @@ fn rdp_file_filter() -> gtk4::FileFilter {
     filter.add_pattern("*.rdp");
     filter.add_mime_type("application/x-rdp");
     filter
-}
-
-/// Longest `.rdp` file accepted.
-const MAX_RDP_FILE_BYTES: u64 = 1024 * 1024;
-
-/// Reads and imports a `.rdp` file, named after the file; errors are user-facing.
-fn read_rdp_file(path: &std::path::Path) -> Result<rdp_file::ImportedRdp, String> {
-    let name = path
-        .file_stem()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let too_big = std::fs::metadata(path).is_ok_and(|m| m.len() > MAX_RDP_FILE_BYTES);
-    if too_big {
-        return Err(format!("{} is too large for an RDP file.", path.display()));
-    }
-    let bytes =
-        std::fs::read(path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
-    rdp_file::decode(&bytes)
-        .and_then(|text| rdp_file::import(&text, &name))
-        .map_err(|e| format!("Could not import {}: {e}", path.display()))
-}
-
-/// `name` without characters that are not allowed in file names.
-fn sanitize_file_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| {
-            if c == '/' || c == '\\' || c.is_control() {
-                '_'
-            } else {
-                c
-            }
-        })
-        .collect();
-    let cleaned = cleaned.trim().trim_start_matches('.').to_string();
-    if cleaned.is_empty() {
-        "Remote PC".to_string()
-    } else {
-        cleaned
-    }
 }

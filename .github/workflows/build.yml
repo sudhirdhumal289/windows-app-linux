@@ -1,0 +1,84 @@
+# Builds and packages every frontend on its own OS: GTK on Linux, WinUI 3 on Windows and
+# AppKit on macOS. Packages are uploaded as workflow artifacts.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux (GTK)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install development packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
+            libwebkitgtk-6.0-dev libsoup-3.0-dev freerdp3-dev libwinpr3-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets
+      - run: cargo test
+      - name: Package (.deb)
+        run: ./scripts/package.sh deb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-app-linux-deb
+          path: target/packages/*.deb
+
+  windows:
+    name: Windows (WinUI 3)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install FreeRDP (vcpkg)
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install freerdp:x64-windows pkgconf:x64-windows
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          "PKG_CONFIG=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\tools\pkgconf\pkgconf.exe" >> $env:GITHUB_ENV
+          "PKG_CONFIG_PATH=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+      - run: cargo clippy --no-default-features --features winui
+      - run: cargo test --lib --no-default-features --features winui
+      - name: Package (.zip)
+        shell: pwsh
+        run: .\scripts\package-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-app-windows-x64
+          path: target/packages/*.zip
+
+  macos:
+    name: macOS (AppKit)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install FreeRDP (Homebrew)
+        run: brew install freerdp pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --no-default-features --features appkit
+      - run: cargo test --lib --no-default-features --features appkit
+      - name: Package (.dmg)
+        run: ./scripts/package.sh macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-app-macos
+          path: target/packages/windows-app-macos.*

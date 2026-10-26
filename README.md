@@ -1,6 +1,6 @@
 # Windows App (Windows 365 & AVD) for Linux
 
-A native, high-performance Linux client for Microsoft Windows 365 Cloud PCs and Azure Virtual Desktop (AVD), re-engineered from the official Windows App MSIX package (`WindowsApp_x64_Release_2.0.1484.0.msix`) and built in Rust using GTK 4 (`gtk4-rs`), libadwaita (`libadwaita-rs`) and WebKitGTK (`webkit6`).
+A native, high-performance Linux client for Microsoft Windows 365 Cloud PCs and Azure Virtual Desktop (AVD), re-engineered from the official Windows App MSIX package (`WindowsApp_x64_Release_2.0.1484.0.msix`) and built in Rust using GTK 4 (`gtk4-rs`), libadwaita (`libadwaita-rs`) and WebKitGTK (`webkit6`). The same Rust core also powers native Windows (WinUI 3) and macOS (AppKit) frontends, written in Rust as well.
 
 ---
 
@@ -98,9 +98,8 @@ The application directly interoperates with Microsoft Cloud PC and Entra ID endp
 
 ## Project Structure
 
-The crate is split into a toolkit-independent **core library** and **frontends**. Only
-the frontend touches a UI toolkit, so native Windows (WinUI) and macOS (AppKit/SwiftUI)
-frontends can be added without changing the core.
+The crate is split into a toolkit-independent **core library** and **frontends**, all in
+Rust. Only a frontend touches a UI toolkit; each follows its platform's design guidelines.
 
 | Module | Responsibility |
 | :--- | :--- |
@@ -114,20 +113,32 @@ frontends can be added without changing the core.
 | `rdp_file` | `.rdp` file import and export |
 | `launcher` | Launch targets (`--connect`), launcher/autostart entries and the desktop search index |
 | `session` | Builds the private `.rdp` file and FreeRDP arguments for a session; per-session scale choices, key combinations and typed text |
-| `rdp` | Safe wrapper around the embedded FreeRDP engine (C bridge in `src/rdp/freerdp_bridge.c`): events, frames, input, clipboard |
+| `rdp` | Safe wrapper around the embedded FreeRDP engine (C bridge in `src/rdp/freerdp_bridge.c`): events, frames, input, clipboard, keymaps for Linux, Windows and macOS |
 | `platform` | Host-OS integration (desktop scale, USB devices, launcher/autostart entries, runtime directories, keyring secrets, connection commands) per OS |
-| `frontend::gtk` | GTK 4 / libadwaita / WebKitGTK user interface (cargo feature `gtk`, default) |
+| `frontend::common` | Toolkit-neutral view models shared by every frontend: the connection library (sections, cards, menus, search), connection preparation, the session controller, web-view sign-in and all user-facing text |
+| `frontend::gtk` | GTK 4 / libadwaita / WebKitGTK interface for Linux (cargo feature `gtk`, default) |
+| `frontend::winui` | WinUI 3 interface for Windows through [`windows-reactor`](https://crates.io/crates/windows-reactor), WebView2 sign-in and a Win32 session view (feature `winui`) |
+| `frontend::appkit` | AppKit interface for macOS through [`objc2`](https://crates.io/crates/objc2), WKWebView sign-in (feature `appkit`) |
 
 The core builds without any frontend: `cargo check --lib --no-default-features`.
 
+| Platform | Design language | Build |
+| :--- | :--- | :--- |
+| Linux | GNOME HIG (libadwaita) | `cargo build --release` |
+| Windows 10/11 | Fluent (Mica, title bar, NavigationView, ContentDialog) | `cargo build --release --no-default-features --features winui` |
+| macOS 13+ | Apple HIG (unified toolbar, sidebar, sheets, SF Symbols) | `cargo build --release --no-default-features --features appkit` |
+
 ### Adding a frontend for another OS
 
-1. Add a cargo feature (e.g. `winui`) and a `src/frontend/<name>/` module gated on it.
-2. Implement the same screens as `frontend::gtk`: main window, sign-in (embedded web view
-   for the authorization-code flow), preferences and a session window.
-3. Drive a session through `session::prepare` and `rdp::NativeRdpBridge`: forward
-   `BridgeEvent`s to the UI thread, draw `Frame`s, and send input with the bridge's
-   `send_*` methods (`rdp::keymap` and `rdp::input` hold the toolkit-neutral helpers).
+1. Add a cargo feature and a `src/frontend/<name>/` module gated on it (and on the target
+   OS), then call its `run()` from `src/main.rs`.
+2. Build the screens from `frontend::common`: turn `library::SectionView`s into native
+   cards or rows and `library::MenuItem`s into native menus, run the `launch::prepare_*`
+   functions to connect, drive sign-in web views with `signin::BrowserSignIn`, and take
+   every string from `text`.
+3. For a session, create a `session::SessionController`; its `Wake` callback must schedule
+   `drain_events()` on the UI thread. Draw the BGRX `rdp::Frame` and forward native input
+   (`rdp::keymap` maps native key codes to RDP scancodes).
 4. Add the OS-specific parts to `platform` and make `build.rs` locate FreeRDP on that OS.
 
 ---
@@ -193,9 +204,20 @@ sudo zypper install -y \
 ```
 
 #### macOS (Homebrew)
+The AppKit frontend only needs FreeRDP and the Xcode command line tools:
 ```bash
-brew install gtk4 libadwaita webkit2png freerdp pkg-config
+xcode-select --install
+brew install freerdp pkg-config
 ```
+
+#### Windows
+Install Rust with the MSVC toolchain, [vcpkg](https://vcpkg.io) and pkgconf, then FreeRDP:
+```powershell
+vcpkg install freerdp:x64-windows pkgconf
+$env:PKG_CONFIG_PATH = "$env:VCPKG_ROOT\installed\x64-windows\lib\pkgconfig"
+```
+The app needs the [Windows App SDK runtime](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads)
+and the WebView2 runtime (preinstalled on Windows 11).
 
 ---
 
@@ -235,7 +257,21 @@ cargo test
 
 # Run the application
 cargo run --release
+
+# Windows (WinUI 3) and macOS (AppKit) frontends
+cargo run --release --no-default-features --features winui
+cargo run --release --no-default-features --features appkit
 ```
+
+The non-Linux frontends can be type-checked from Linux with a cross target, e.g.
+`cargo check --no-default-features --features appkit --target aarch64-apple-darwin`
+(FreeRDP is skipped when cross-compiling, so only checking works, not linking).
+
+Real Windows and macOS builds need their own OS: the Apple SDK (AppKit, WebKit) may only be
+used on Apple hardware, and FreeRDP must be built for each target. The
+[`Build` workflow](.github/workflows/build.yml) builds, tests and packages all three
+frontends on GitHub's Linux, Windows and macOS runners and uploads the `.deb`, `.zip` and
+`.dmg` as artifacts.
 
 ---
 
@@ -260,7 +296,7 @@ A unified packaging entrypoint is provided in `scripts/package.sh`, which automa
 ./scripts/package.sh rpm       # Fedora, RHEL, CentOS (.rpm)
 ./scripts/package.sh opensuse  # openSUSE Tumbleweed / Leap (.rpm)
 ./scripts/package.sh arch      # Arch Linux, Manjaro (.pkg.tar.zst)
-./scripts/package.sh macos     # macOS App Bundle (.app, .dmg, .tar.gz)
+./scripts/package.sh macos     # macOS App Bundle with the AppKit frontend (.app, .dmg, .tar.gz)
 ./scripts/package.sh all       # Package all supported platforms
 ```
 
@@ -270,6 +306,7 @@ Output artifacts are generated in `target/packages/`:
 - **openSUSE**: `target/packages/windows-app-linux-<version>-1.suse*.x86_64.rpm`
 - **Arch / Manjaro**: `target/packages/windows-app-linux-<version>-1-x86_64.pkg.tar.zst`
 - **macOS**: `target/packages/windows-app-macos.dmg` / `windows-app-macos.tar.gz`
+- **Windows** (run `.\scripts\package-windows.ps1` on Windows): `target\packages\windows-app-windows-x64.zip`
 
 ### 2. Runtime Package Dependencies
 
@@ -281,7 +318,8 @@ When packages are installed, the respective package managers resolve and install
 | **Fedora / RHEL** | `gtk4 >= 4.14`, `libadwaita >= 1.5`, `webkitgtk6.0 >= 2.42`, `libsoup3 >= 3.0`, `freerdp-libs >= 3.0` |
 | **openSUSE** | `gtk4 >= 4.14`, `libadwaita-1-0 >= 1.5`, `libwebkit2gtk-6_0-4 >= 2.42`, `libsoup-3_0-0 >= 3.0`, `freerdp >= 3.0` |
 | **Arch Linux / Manjaro** | `gtk4`, `libadwaita`, `webkitgtk-6.0`, `libsoup3`, `freerdp` |
-| **macOS** | `gtk4`, `libadwaita`, `freerdp` |
+| **macOS** | `freerdp` (Homebrew) |
+| **Windows** | Windows App SDK runtime, WebView2 runtime (FreeRDP DLLs are bundled) |
 
 ### 3. Installing Generated Packages
 

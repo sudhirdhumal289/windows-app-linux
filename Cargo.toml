@@ -3,15 +3,30 @@ name = "windows-app-linux"
 version = "0.1.0"
 edition = "2021"
 authors = ["Sudhir <sudhir@local>"]
-description = "Native client for Microsoft Windows 365 and Azure Virtual Desktop built with Rust, FreeRDP 3 and GTK 4 / libadwaita"
+description = "Native client for Windows 365, Azure Virtual Desktop and Remote Desktop built with Rust and FreeRDP 3, with GTK 4 / libadwaita, WinUI 3 and AppKit frontends"
 license = "MIT OR Apache-2.0"
 build = "build.rs"
 
 [features]
 default = ["gtk"]
-# GTK 4 / libadwaita / WebKitGTK frontend (Linux). Future native frontends (WinUI, AppKit)
-# get their own feature; the core library builds without any of them.
+# One native frontend per platform; the core library builds without any of them.
+# GTK 4 / libadwaita / WebKitGTK (Linux).
 gtk = ["dep:gtk4", "dep:adw", "dep:webkit6", "dep:gdk4-x11"]
+# WinUI 3 through windows-reactor, WebView2 sign-in and a Direct3D/Win32 session view
+# (Windows). Build with `--no-default-features --features winui`.
+winui = ["dep:windows-reactor", "dep:windows", "dep:webview2-com"]
+# AppKit through objc2, WKWebView sign-in (macOS). Build with
+# `--no-default-features --features appkit`.
+appkit = [
+    "dep:objc2",
+    "dep:objc2-foundation",
+    "dep:objc2-app-kit",
+    "dep:objc2-web-kit",
+    "dep:objc2-core-graphics",
+    "dep:objc2-core-foundation",
+    "dep:block2",
+    "dep:dispatch2",
+]
 
 [lib]
 name = "windows_app_linux"
@@ -20,7 +35,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "windows-app-linux"
 path = "src/main.rs"
-required-features = ["gtk"]
 
 [dependencies]
 # GUI frontend (GTK 4, libadwaita & WebKitGTK 6)
@@ -54,6 +68,37 @@ keyring = { version = "3", features = ["async-secret-service", "tokio", "crypto-
 [target.'cfg(target_os = "linux")'.dependencies]
 # Workspace placement of session windows on X11 (Wayland has no client API for it).
 gdk4-x11 = { version = "0.11", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-reactor = { version = "0.100", optional = true }
+webview2-com = { version = "0.39", optional = true }
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-foundation = { version = "0.3", optional = true }
+objc2-app-kit = { version = "0.3", optional = true }
+objc2-web-kit = { version = "0.3", optional = true }
+objc2-core-graphics = { version = "0.3", optional = true }
+objc2-core-foundation = { version = "0.3", optional = true }
+block2 = { version = "0.6", optional = true }
+dispatch2 = { version = "0.3", optional = true }
 
 [profile.release]
 opt-level = 3

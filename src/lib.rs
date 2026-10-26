@@ -1,5 +1,5 @@
-//! Windows App for Linux — a native client for Windows 365 Cloud PCs and Azure Virtual
-//! Desktop.
+//! Windows App — a native client for Windows 365 Cloud PCs, Azure Virtual Desktop and any
+//! Remote Desktop (RDP) computer, on Linux, Windows and macOS.
 //!
 //! The crate is split into a portable core and per-platform frontends:
 //!
@@ -16,7 +16,7 @@
 //! | [`launcher`] | Launch targets (`--connect`), desktop search index | none |
 //! | [`rdp`] | Embedded FreeRDP 3 engine (C bridge + safe Rust wrapper) | none |
 //! | [`platform`] | Host OS integration (display scale, password store, hooks) | none |
-//! | `frontend` | Native UI (GTK 4 / libadwaita today) | per platform |
+//! | `frontend` | Shared view models (`frontend::common`) and native UIs: GTK 4 / libadwaita (Linux), WinUI 3 (Windows), AppKit (macOS) | per platform |
 
 pub mod api;
 pub mod auth;

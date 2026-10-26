@@ -20,5 +20,32 @@
     <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026 Sudhir Dhumal</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Remote PCs can use your camera when you turn on camera redirection.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Remote PCs can use your microphone when you turn on microphone redirection.</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Remote Desktop Connection</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>rdp</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
