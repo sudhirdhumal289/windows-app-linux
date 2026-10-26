@@ -34,14 +34,14 @@ jobs:
         shell: pwsh
         env:
           VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
-        run: |\
+        run: |
           New-Item -ItemType Directory -Force $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install --triplet=${{ matrix.triplet }} --x-install-root=vcpkg_installed
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Package the SDK
         id: sdk
         shell: pwsh
-        run: |\
+        run: |
           $ErrorActionPreference = 'Stop'
           $triplet = '${{ matrix.triplet }}'
           $src = "vcpkg_installed\$triplet"
@@ -70,7 +70,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |\
+        run: |
           $tag = '${{ steps.sdk.outputs.tag }}'
           gh release view $tag 2>$null
           if ($LASTEXITCODE -ne 0) {
@@ -83,7 +83,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Pin the SDK
         shell: pwsh
-        run: |\
+        run: |
           $ErrorActionPreference = 'Stop'
           $triplet = '${{ matrix.triplet }}'
           $url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/${{ steps.sdk.outputs.tag }}/${{ steps.sdk.outputs.zip }}"
