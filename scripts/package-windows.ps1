@@ -31,7 +31,8 @@ $Output = Join-Path $Root "target\packages"
 Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $Stage, $Output | Out-Null
 
-Copy-Item (Join-Path $Release "windows-app-linux.exe") (Join-Path $Stage "WindowsApp.exe")
+$ExeSrc = if (Test-Path (Join-Path $Release "windows-app.exe")) { Join-Path $Release "windows-app.exe" } else { Join-Path $Release "windows-app-linux.exe" }
+Copy-Item $ExeSrc (Join-Path $Stage "WindowsApp.exe")
 Copy-Item "packaging\windows\AppIcon.ico" $Stage
 
 # Copy runtime binaries and resources, explicitly omitting cargo internal build folders

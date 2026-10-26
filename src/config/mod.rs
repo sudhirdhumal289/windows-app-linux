@@ -186,12 +186,23 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// Per-user configuration directory (e.g. `~/.config/windows-app-linux`).
+    /// Per-user configuration directory (e.g. `~/.config/windows-app`).
+    /// Transparently falls back to `windows-app-linux` if an existing installation exists.
     #[must_use]
     pub fn config_dir() -> PathBuf {
-        ProjectDirs::from("com", "microsoft", "windows-app-linux")
+        let new_dir = ProjectDirs::from("com", "microsoft", "windows-app")
             .map(|dirs| dirs.config_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from(".config/windows-app-linux"))
+            .unwrap_or_else(|| PathBuf::from(".config/windows-app"));
+        if new_dir.exists() {
+            return new_dir;
+        }
+        let legacy_dir = ProjectDirs::from("com", "microsoft", "windows-app-linux")
+            .map(|dirs| dirs.config_dir().to_path_buf())
+            .unwrap_or_else(|| PathBuf::from(".config/windows-app-linux"));
+        if legacy_dir.exists() {
+            return legacy_dir;
+        }
+        new_dir
     }
 
     #[must_use]

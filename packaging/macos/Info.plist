@@ -9,13 +9,13 @@
     <key>CFBundleIdentifier</key>
     <string>com.microsoft.windowsapp.linux</string>
     <key>CFBundleVersion</key>
-    <string>0.1.0</string>
+    <string>0.2.0</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.2.0</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>windows-app-linux</string>
+    <string>windows-app</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>NSHighResolutionCapable</key>

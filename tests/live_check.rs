@@ -2,11 +2,11 @@
 //! `cargo test --test live_check -- --ignored --nocapture` after signing in with the app.
 
 use std::sync::Arc;
-use windows_app_linux::api::{CloudPcService, GraphApiClient};
-use windows_app_linux::auth::AuthManager;
-use windows_app_linux::config::constants::{COMMON_AUTHORITY, WINDOWS_APP_CLIENT_ID};
-use windows_app_linux::session::{self, SessionOptions};
-use windows_app_linux::AppConfig;
+use windows_app::api::{CloudPcService, GraphApiClient};
+use windows_app::auth::AuthManager;
+use windows_app::config::constants::{COMMON_AUTHORITY, WINDOWS_APP_CLIENT_ID};
+use windows_app::session::{self, SessionOptions};
+use windows_app::AppConfig;
 
 #[tokio::test]
 #[ignore = "requires live network and a signed-in account"]

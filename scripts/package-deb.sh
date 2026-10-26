@@ -12,7 +12,7 @@ check_dev_dependencies
 
 VERSION="$(grep '^version' "${ROOT_DIR}/Cargo.toml" | head -n 1 | cut -d '"' -f 2)"
 ARCH="amd64"
-PKG_NAME="windows-app-linux_${VERSION}_${ARCH}"
+PKG_NAME="windows-app_${VERSION}_${ARCH}"
 BUILD_DIR="${ROOT_DIR}/target/package-deb/${PKG_NAME}"
 OUTPUT_DIR="${ROOT_DIR}/target/packages"
 
@@ -20,9 +20,12 @@ echo "==> Building release binary..."
 cd "${ROOT_DIR}"
 cargo build --release
 
-BIN_SRC="${ROOT_DIR}/target/release/windows-app-linux"
-if [ ! -f "${BIN_SRC}" ]; then
-    echo "Error: Release binary ${BIN_SRC} not found!"
+if [ -f "${ROOT_DIR}/target/release/windows-app" ]; then
+    BIN_SRC="${ROOT_DIR}/target/release/windows-app"
+elif [ -f "${ROOT_DIR}/target/release/windows-app-linux" ]; then
+    BIN_SRC="${ROOT_DIR}/target/release/windows-app-linux"
+else
+    echo "Error: Release binary not found in target/release!"
     exit 1
 fi
 
@@ -34,8 +37,9 @@ mkdir -p "${BUILD_DIR}/usr/share/applications"
 mkdir -p "${BUILD_DIR}/usr/share/icons/hicolor/scalable/apps"
 
 # Binary
-cp "${BIN_SRC}" "${BUILD_DIR}/usr/bin/windows-app-linux"
-chmod 755 "${BUILD_DIR}/usr/bin/windows-app-linux"
+cp "${BIN_SRC}" "${BUILD_DIR}/usr/bin/windows-app"
+chmod 755 "${BUILD_DIR}/usr/bin/windows-app"
+ln -sf windows-app "${BUILD_DIR}/usr/bin/windows-app-linux"
 
 # Desktop entry
 cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.desktop" "${BUILD_DIR}/usr/share/applications/"
@@ -71,14 +75,16 @@ done
 FREERDP_BUNDLE="${ROOT_DIR}/freerdp-3.32"
 if [ -d "${FREERDP_BUNDLE}" ]; then
     echo "==> Bundling FreeRDP 3.32+ libraries..."
-    LIB_DEST="${BUILD_DIR}/usr/lib/windows-app-linux"
+    LIB_DEST="${BUILD_DIR}/usr/lib/windows-app"
     mkdir -p "${LIB_DEST}"
     find "${FREERDP_BUNDLE}/lib" -maxdepth 2 -name "*.so*" -exec cp -a {} "${LIB_DEST}/" \;
 fi
 
 # DEBIAN/control - strictly specifies required system runtime dependencies
 cat <<EOF > "${BUILD_DIR}/DEBIAN/control"
-Package: windows-app-linux
+Package: windows-app
+Provides: windows-app-linux
+Replaces: windows-app-linux
 Version: ${VERSION}
 Section: utils
 Priority: optional

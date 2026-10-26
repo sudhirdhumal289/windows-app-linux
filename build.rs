@@ -94,6 +94,7 @@ fn main() {
     }
     // Origin-relative rpath on Linux so the binary finds sibling libraries.
     if target_os == "linux" {
+        println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN/../lib/windows-app");
         println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN/../lib/windows-app-linux");
         println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN/../lib");
         println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN");
@@ -279,7 +280,7 @@ fn fetch_prebuilt_sdk(url: &str, sha256: &str) -> Result<PathBuf, String> {
     let cache = env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(env::temp_dir)
-        .join("windows-app-linux")
+        .join("windows-app")
         .join("freerdp-sdk");
     let dir = cache.join(&sha256);
     if has_freerdp(&dir) {

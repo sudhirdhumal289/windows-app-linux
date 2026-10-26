@@ -43,7 +43,7 @@ fn autostart_plist_path(target: &LaunchTarget) -> io::Result<PathBuf> {
 }
 
 fn exec_path() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("windows-app-linux"))
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("windows-app"))
 }
 
 fn write_plist(path: &std::path::Path, target: &LaunchTarget) -> io::Result<()> {

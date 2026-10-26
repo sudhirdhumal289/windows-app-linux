@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Windows App
 Comment=Connect to Windows 365 Cloud PCs and Azure Virtual Desktops
-Exec=windows-app-linux %F
+Exec=windows-app %F
 Icon=com.microsoft.windowsapp.linux
 Terminal=false
 Type=Application

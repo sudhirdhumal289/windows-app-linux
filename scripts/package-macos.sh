@@ -16,9 +16,12 @@ echo "==> Building release binary (AppKit frontend)..."
 cd "${ROOT_DIR}"
 cargo build --release --no-default-features --features appkit
 
-BIN_SRC="${ROOT_DIR}/target/release/windows-app-linux"
-if [ ! -f "${BIN_SRC}" ]; then
-    echo "Error: Release binary ${BIN_SRC} not found!"
+if [ -f "${ROOT_DIR}/target/release/windows-app" ]; then
+    BIN_SRC="${ROOT_DIR}/target/release/windows-app"
+elif [ -f "${ROOT_DIR}/target/release/windows-app-linux" ]; then
+    BIN_SRC="${ROOT_DIR}/target/release/windows-app-linux"
+else
+    echo "Error: Release binary not found in target/release!"
     exit 1
 fi
 
@@ -29,14 +32,15 @@ mkdir -p "${RESOURCES_DIR}"
 mkdir -p "${OUTPUT_DIR}"
 
 # Binary and Info.plist
-cp "${BIN_SRC}" "${MACOS_DIR}/windows-app-linux"
-chmod 755 "${MACOS_DIR}/windows-app-linux"
+cp "${BIN_SRC}" "${MACOS_DIR}/windows-app"
+chmod 755 "${MACOS_DIR}/windows-app"
+ln -sf windows-app "${MACOS_DIR}/windows-app-linux"
 cp "${ROOT_DIR}/packaging/macos/Info.plist" "${CONTENTS_DIR}/"
 
 # FreeRDP and its dependencies come from Homebrew; copy them into Contents/Frameworks so
 # the app starts on Macs without those packages.
 echo "==> Bundling FreeRDP and dependent libraries..."
-python3 "${SCRIPT_DIR}/bundle-macos-dylibs.py" "${MACOS_DIR}/windows-app-linux"
+python3 "${SCRIPT_DIR}/bundle-macos-dylibs.py" "${MACOS_DIR}/windows-app"
 
 # App icon: packaging/macos/AppIcon.appiconset holds every size iconutil expects.
 if command -v iconutil >/dev/null 2>&1; then

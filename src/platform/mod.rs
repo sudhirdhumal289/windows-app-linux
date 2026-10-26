@@ -90,7 +90,7 @@ pub fn clipboard_files_dir() -> std::io::Result<std::path::PathBuf> {
     let dir = directories::BaseDirs::new()
         .map(|d| d.cache_dir().to_path_buf())
         .unwrap_or_else(std::env::temp_dir)
-        .join("windows-app-linux")
+        .join("windows-app")
         .join("clipboard");
     let mut builder = std::fs::DirBuilder::new();
     builder.recursive(true);
@@ -111,5 +111,5 @@ pub fn runtime_dir() -> std::path::PathBuf {
     directories::BaseDirs::new()
         .and_then(|d| d.runtime_dir().map(std::path::Path::to_path_buf))
         .unwrap_or_else(std::env::temp_dir)
-        .join("windows-app-linux")
+        .join("windows-app")
 }

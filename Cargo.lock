@@ -3167,8 +3167,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-app-linux"
-version = "0.1.0"
+name = "windows-app"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "block2",

@@ -1,6 +1,6 @@
 [package]
-name = "windows-app-linux"
-version = "0.1.0"
+name = "windows-app"
+version = "0.2.0"
 edition = "2021"
 authors = ["Sudhir <sudhir@local>"]
 description = "Native client for Windows 365, Azure Virtual Desktop and Remote Desktop built with Rust and FreeRDP 3, with GTK 4 / libadwaita, WinUI 3 and AppKit frontends"
@@ -29,11 +29,11 @@ appkit = [
 ]
 
 [lib]
-name = "windows_app_linux"
+name = "windows_app"
 path = "src/lib.rs"
 
 [[bin]]
-name = "windows-app-linux"
+name = "windows-app"
 path = "src/main.rs"
 
 [dependencies]
@@ -108,13 +108,13 @@ panic = "abort"
 strip = true
 
 [package.metadata.deb]
-name = "windows-app-linux"
+name = "windows-app"
 maintainer = "Windows App for Linux Contributors"
 depends = "libgtk-4-1 (>= 4.14), libadwaita-1-0 (>= 1.5), libwebkitgtk-6.0-4 (>= 2.40), libsoup-3.0-0 (>= 3.0), libfreerdp3-3, libfreerdp-client3-3, libwinpr3-3"
 section = "utils"
 priority = "optional"
 assets = [
-    ["target/release/windows-app-linux", "usr/bin/", "755"],
+    ["target/release/windows-app", "usr/bin/", "755"],
     ["assets/com.microsoft.windowsapp.linux.desktop", "usr/share/applications/", "644"],
     ["assets/com.microsoft.windowsapp.linux.search-provider.ini", "usr/share/gnome-shell/search-providers/", "644"],
     ["assets/com.microsoft.windowsapp.linux.service", "usr/share/dbus-1/services/", "644"],

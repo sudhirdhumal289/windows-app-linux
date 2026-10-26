@@ -19,17 +19,17 @@ fn main() -> ExitCode {
 
 #[cfg(feature = "gtk")]
 fn run() -> ExitCode {
-    windows_app_linux::frontend::gtk::run().into()
+    windows_app::frontend::gtk::run().into()
 }
 
 #[cfg(all(windows, feature = "winui", not(feature = "gtk")))]
 fn run() -> ExitCode {
-    windows_app_linux::frontend::winui::run()
+    windows_app::frontend::winui::run()
 }
 
 #[cfg(all(target_os = "macos", feature = "appkit", not(feature = "gtk")))]
 fn run() -> ExitCode {
-    windows_app_linux::frontend::appkit::run()
+    windows_app::frontend::appkit::run()
 }
 
 #[cfg(not(any(
@@ -38,9 +38,6 @@ fn run() -> ExitCode {
     all(target_os = "macos", feature = "appkit")
 )))]
 fn run() -> ExitCode {
-    eprintln!(
-        "This build has no user interface. Rebuild with one of the features \
-         `gtk` (Linux), `winui` (Windows) or `appkit` (macOS)."
-    );
+    eprintln!("No frontend enabled; build with --features gtk, winui or appkit");
     ExitCode::FAILURE
 }

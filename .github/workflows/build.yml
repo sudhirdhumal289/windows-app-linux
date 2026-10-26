@@ -14,15 +14,15 @@ env:
 
 jobs:
   linux:
-    name: Linux (GTK)
+    name: Linux (GTK - deb, rpm, opensuse, arch)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install development packages
+      - name: Install development & packaging packages
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
-            libwebkitgtk-6.0-dev libsoup-3.0-dev freerdp3-dev libwinpr3-dev
+            libwebkitgtk-6.0-dev libsoup-3.0-dev freerdp3-dev libwinpr3-dev rpm zstd
       - name: Fetch FreeRDP 3.32+ Bundle
         run: ./scripts/fetch-freerdp.sh
       - uses: dtolnay/rust-toolchain@stable
@@ -32,12 +32,18 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets
       - run: cargo test
-      - name: Package (.deb)
-        run: ./scripts/package.sh deb
+      - name: Package Linux Distributions (deb, rpm, opensuse, arch)
+        run: |
+          ./scripts/package-deb.sh
+          ./scripts/package-rpm.sh
+          ./scripts/package-opensuse.sh
+          ./scripts/package-arch.sh
+          echo "Generated packages:"
+          ls -lh target/packages/
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-app-linux-deb
-          path: target/packages/*.deb
+          name: windows-app-linux-packages
+          path: target/packages/*
 
   windows:
     name: Windows (WinUI 3)
@@ -93,7 +99,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: windows-app-linux-deb
+          name: windows-app-linux-packages
           path: target/packages
       - name: Install .deb package
         run: |
@@ -101,7 +107,7 @@ jobs:
           sudo apt-get install -y xvfb dbus-x11 ./target/packages/*.deb
       - name: Launch headlessly under Xvfb
         run: |
-          xvfb-run -a dbus-launch windows-app-linux &
+          xvfb-run -a dbus-launch windows-app &
           pid=$!
           sleep 3
           if ! kill -0 "$pid" 2>/dev/null; then
@@ -119,10 +125,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Download Linux package (.deb)
+      - name: Download Linux packages (.deb, .rpm, .pkg.tar.zst)
         uses: actions/download-artifact@v4
         with:
-          name: windows-app-linux-deb
+          name: windows-app-linux-packages
           path: release-assets
       - name: Download Windows package (.exe, .zip)
         uses: actions/download-artifact@v4

@@ -64,7 +64,7 @@ fn autostart_path(target: &LaunchTarget) -> io::Result<PathBuf> {
 }
 
 fn exec_path() -> PathBuf {
-    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("windows-app-linux"))
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("windows-app"))
 }
 
 fn write_entry(path: &Path, contents: &str) -> io::Result<()> {
@@ -169,8 +169,8 @@ mod tests {
         assert!(text.contains("X-GNOME-Autostart-enabled=true"));
         assert!(text.contains(&format!("Icon={APP_ID}\n")));
 
-        let plain = desktop_entry(&entry, Path::new("/usr/bin/windows-app-linux"), false);
-        assert!(plain.contains("Exec=/usr/bin/windows-app-linux --connect remote:abc-1\n"));
+        let plain = desktop_entry(&entry, Path::new("/usr/bin/windows-app"), false);
+        assert!(plain.contains("Exec=/usr/bin/windows-app --connect remote:abc-1\n"));
         assert!(!plain.contains("Autostart"));
         assert_eq!(
             file_name(&entry.target),

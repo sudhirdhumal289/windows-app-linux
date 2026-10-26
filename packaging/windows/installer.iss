@@ -3,7 +3,7 @@
 ; Bundles the application executable, FreeRDP 3 DLLs, Windows App SDK runtime, and Visual C++ CRT.
 
 #ifndef AppVersion
-#define AppVersion "0.1.0"
+#define AppVersion "0.2.0"
 #endif
 
 #define AppName "Windows App"
