@@ -9,10 +9,12 @@ use std::path::PathBuf;
 pub fn desktop_scale_percent() -> Option<u32> {
     #[cfg(all(target_os = "macos", feature = "appkit"))]
     {
-        if let Some(screen) = objc2_app_kit::NSScreen::mainScreen() {
-            let factor = screen.backingScaleFactor();
-            if factor > 0.0 {
-                return Some((factor * 100.0).round() as u32);
+        if let Some(mtm) = objc2::MainThreadMarker::new() {
+            if let Some(screen) = objc2_app_kit::NSScreen::mainScreen(mtm) {
+                let factor = screen.backingScaleFactor();
+                if factor > 0.0 {
+                    return Some((factor * 100.0).round() as u32);
+                }
             }
         }
     }

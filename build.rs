@@ -453,12 +453,14 @@ fn copy_linux_so(libs: &[pkg_config::Library]) {
                         let target = dest.join(&name);
                         let _ = fs::create_dir_all(dest);
                         let _ = fs::remove_file(&target);
+                        #[cfg(unix)]
                         if let Ok(link_dest) = fs::read_link(&path) {
-                            #[cfg(unix)]
                             let _ = std::os::unix::fs::symlink(&link_dest, &target);
                         } else {
                             let _ = fs::copy(&path, &target);
                         }
+                        #[cfg(not(unix))]
+                        let _ = fs::copy(&path, &target);
                     }
                 }
             }

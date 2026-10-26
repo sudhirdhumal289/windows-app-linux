@@ -90,7 +90,7 @@ Section: utils
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: Windows App for Linux Contributors
-Depends: libgtk-4-1 (>= 4.14), libadwaita-1-0 (>= 1.5), libwebkitgtk-6.0-4 (>= 2.42), libsoup-3.0-0 (>= 3.0), libfreerdp3-3 | libfreerdp3 | libc6, libwinpr3-3 | libwinpr3 | libc6
+Depends: libgtk-4-1 (>= 4.14), libadwaita-1-0 (>= 1.5), libwebkitgtk-6.0-4 (>= 2.42), libsoup-3.0-0 (>= 3.0), libfreerdp3-3 | libfreerdp3 | libc6, libwinpr3-3 | libwinpr3 | libc6, libfuse3-4 | libfuse3-3 | libc6
 Description: Microsoft Windows 365 Cloud PC and Azure Virtual Desktop client for Linux
  Native Linux client written in Rust using GTK 4 and WebKitGTK 6 for connecting
  to Windows 365 Cloud PCs and AVD environments.

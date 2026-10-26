@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Check for required development packages on the build machine
+# Checks for required build and development dependencies across supported distributions
 
 check_dev_dependencies() {
+    # Check pkg-config availability
     if ! command -v pkg-config >/dev/null 2>&1; then
-        echo "Error: 'pkg-config' is not installed."
-        echo "Please install pkg-config and development packages on this machine:"
-        echo "  - Debian / Ubuntu:   sudo apt install -y pkg-config build-essential"
-        echo "  - Fedora / RHEL:     sudo dnf install -y pkgconfig gcc"
-        echo "  - Arch / Manjaro:    sudo pacman -S --needed pkgconf base-devel"
-        echo "  - openSUSE:          sudo zypper install -y pkg-config patterns-devel-base-devel_basis"
+        echo "Error: pkg-config is not installed."
+        echo "Please install pkg-config using your package manager:"
+        echo "  - Debian/Ubuntu:     sudo apt install -y pkg-config"
+        echo "  - Fedora/RHEL:       sudo dnf install -y pkgconfig"
+        echo "  - Arch/Manjaro:      sudo pacman -S --needed pkgconf"
+        echo "  - openSUSE:          sudo zypper install -y pkg-config"
         echo "  - macOS (Homebrew):  brew install pkg-config"
         exit 1
     fi
@@ -29,7 +30,7 @@ check_dev_dependencies() {
         echo "Please install development headers on your system before building packages:"
         echo ""
         echo "  Debian / Ubuntu / Linux Mint:"
-        echo "    sudo apt install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev libsoup-3.0-dev freerdp3-dev libwinpr3-dev"
+        echo "    sudo apt install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev libsoup-3.0-dev freerdp3-dev libwinpr3-dev libfuse3-dev"
         echo ""
         echo "  Fedora / RHEL / CentOS Stream:"
         echo "    sudo dnf install -y gcc gcc-c++ pkgconfig gtk4-devel libadwaita-devel webkitgtk6.0-devel libsoup3-devel freerdp-devel winpr-devel"
@@ -49,5 +50,5 @@ check_dev_dependencies() {
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     check_dev_dependencies
-    echo "All development dependencies are satisfied."
+    echo "All required development libraries are present."
 fi
