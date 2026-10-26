@@ -46,6 +46,11 @@ mkdir -p "${BUILD_DIR}/usr/share/gnome-shell/search-providers" "${BUILD_DIR}/usr
 install -m 644 "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.search-provider.ini" "${BUILD_DIR}/usr/share/gnome-shell/search-providers/"
 install -m 644 "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.service" "${BUILD_DIR}/usr/share/dbus-1/services/"
 
+# Optional GNOME Shell helper for restoring workspaces (turned on in Preferences)
+EXT_DIR="${BUILD_DIR}/usr/share/gnome-shell/extensions/windows-app-linux@sudhirdhumal289.github.io"
+mkdir -p "${EXT_DIR}"
+install -m 644 "${ROOT_DIR}/assets/gnome-shell-extension/windows-app-linux@sudhirdhumal289.github.io/"* "${EXT_DIR}/"
+
 # Scalable vector icon
 cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.svg" "${BUILD_DIR}/usr/share/icons/hicolor/scalable/apps/"
 chmod 644 "${BUILD_DIR}/usr/share/icons/hicolor/scalable/apps/com.microsoft.windowsapp.linux.svg"

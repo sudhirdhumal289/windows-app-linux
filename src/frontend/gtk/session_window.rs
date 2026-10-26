@@ -3,7 +3,11 @@
 use super::canvas::RdpCanvas;
 use super::clipboard::{self, RemoteFilesProvider};
 use super::fullscreen_dock::FullscreenDock;
+use super::open_sessions;
+use super::placement;
 use super::rdp_auth::RdpAuthDialog;
+use crate::launcher::LaunchTarget;
+use crate::placement::{PlacementStore, WindowPlacement};
 use crate::rdp::keymap::{rdp_scancode_from_xkb, PressedKeys};
 use crate::rdp::{
     BridgeEvent, BridgeOptions, CertificateDecision, CertificatePrompt, ConnectionQuality,
@@ -26,6 +30,7 @@ use std::time::Duration;
 
 /// Resize requests are sent once the window size has been stable for this long.
 const RESIZE_DEBOUNCE: Duration = Duration::from_millis(300);
+const PLACEMENT_SETTLE: Duration = Duration::from_secs(1);
 /// Touchpad scrolling reports pixels; this many count as one wheel notch.
 const SURFACE_PX_PER_NOTCH: f64 = 50.0;
 /// Most monitors a remote layout can contain.
@@ -41,6 +46,8 @@ pub struct SessionWindowOptions {
     /// The remote desktop follows the window size (otherwise it has a fixed size, which
     /// is scaled to the window).
     pub dynamic_resolution: bool,
+    /// Reopen on the monitor and workspace this connection's window was last on.
+    pub remember_placement: Option<LaunchTarget>,
 }
 
 /// A fullscreen window showing the session's part on another monitor.
@@ -92,6 +99,11 @@ pub struct SessionWindow {
     texture: RefCell<Option<gdk::Texture>>,
     /// Connection quality indicators (header and dock).
     quality_icons: Vec<gtk4::Image>,
+    /// Connection whose window placement is remembered, and the placement last saved.
+    placement_key: Option<LaunchTarget>,
+    placement: RefCell<WindowPlacement>,
+    /// The saved placement has been applied, so the current one can be recorded.
+    placement_restored: Cell<bool>,
     on_close: RefCell<Option<std::boxed::Box<dyn FnOnce()>>>,
 }
 
@@ -203,9 +215,19 @@ impl SessionWindow {
             screens: RefCell::new(Vec::new()),
             texture: RefCell::new(None),
             quality_icons: vec![header_quality, dock.quality_icon.clone()],
+            placement: RefCell::new(
+                options
+                    .remember_placement
+                    .as_ref()
+                    .map(|target| PlacementStore::default().get(target))
+                    .unwrap_or_default(),
+            ),
+            placement_key: options.remember_placement,
+            placement_restored: Cell::new(false),
             on_close: RefCell::new(Some(std::boxed::Box::new(on_close))),
         });
 
+        open_sessions::register(&this.window, name);
         this.install_window_chrome(&header, &fullscreen_button, &disconnect_button, &dock);
         this.install_scale_actions();
         this.install_session_actions();
@@ -218,23 +240,96 @@ impl SessionWindow {
         this.start(session, options.login_hint);
 
         window.present();
+        this.track_placement();
         // Enter fullscreen only after the window has been mapped normally: mapping it
         // directly as fullscreen leaves Mutter without a placed restore geometry, so
         // leaving fullscreen would put the title bar behind GNOME's top bar.
         let ticks = Cell::new(0u8);
         let weak = Rc::downgrade(&this);
-        window.add_tick_callback(move |win, _| {
+        window.add_tick_callback(move |_, _| {
             ticks.set(ticks.get() + 1);
             if ticks.get() < 2 {
                 return glib::ControlFlow::Continue;
             }
-            // A session that already ended (e.g. the host was not found) stays windowed.
-            let running = weak.upgrade().is_some_and(|this| this.bridge().is_some());
-            if running && !win.is_fullscreen() {
-                win.fullscreen();
+            if let Some(this) = weak.upgrade() {
+                this.restore_placement();
             }
             glib::ControlFlow::Break
         });
+    }
+
+    /// Moves the newly shown window to its saved workspace and enters fullscreen on its
+    /// saved monitor (or the current one).
+    fn restore_placement(self: &Rc<Self>) {
+        let saved = self.placement.borrow().clone();
+        if let Some(workspace) = saved.workspace {
+            placement::move_to_workspace(self.window.upcast_ref(), workspace);
+        }
+        // A session that already ended (e.g. the host was not found) stays windowed.
+        if self.bridge().is_some() && !self.window.is_fullscreen() {
+            let monitor = saved
+                .monitor
+                .and_then(|id| placement::find_monitor(&WidgetExt::display(&self.window), &id));
+            match monitor {
+                Some(monitor) => self.window.fullscreen_on_monitor(&monitor),
+                None => self.window.fullscreen(),
+            }
+        }
+        // Start tracking once the window manager has applied the moves, so their
+        // intermediate state is not recorded. Staying on the same monitor emits no
+        // `enter-monitor`, hence the explicit save.
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(PLACEMENT_SETTLE, move || {
+            if let Some(this) = weak.upgrade() {
+                this.placement_restored.set(true);
+                this.save_placement();
+            }
+        });
+    }
+
+    /// Records the placement whenever the window moves to another monitor.
+    fn track_placement(self: &Rc<Self>) {
+        if self.placement_key.is_none() {
+            return;
+        }
+        let Some(surface) = self.window.surface() else {
+            return;
+        };
+        let weak = Rc::downgrade(self);
+        surface.connect_enter_monitor(move |_, _| {
+            if let Some(this) = weak.upgrade() {
+                this.save_placement();
+            }
+        });
+    }
+
+    /// Saves where the window is now. What the platform cannot report keeps its saved
+    /// value (e.g. the workspace on Wayland).
+    fn save_placement(&self) {
+        let Some(target) = &self.placement_key else {
+            return;
+        };
+        if !self.placement_restored.get() {
+            return;
+        }
+        let Some(current) = placement::current(self.window.upcast_ref()) else {
+            return;
+        };
+        let merged = {
+            let saved = self.placement.borrow();
+            WindowPlacement {
+                monitor: current.monitor.or_else(|| saved.monitor.clone()),
+                workspace: current.workspace.or(saved.workspace),
+            }
+        };
+        if *self.placement.borrow() == merged {
+            return;
+        }
+        log::debug!("Session window placement for {target}: {merged:?}");
+        if let Err(e) = PlacementStore::default().set(target, merged.clone()) {
+            log::warn!("Could not save the session window placement: {e}");
+        }
+        self.placement.replace(merged);
     }
 
     fn bridge(&self) -> Option<Rc<NativeRdpBridge>> {
@@ -542,6 +637,7 @@ impl SessionWindow {
                 if this.multi_monitor {
                     this.schedule_resize();
                 }
+                this.save_placement();
             }
             if let Some(header) = header_weak.upgrade() {
                 header.set_visible(!fullscreen);
@@ -603,6 +699,7 @@ impl SessionWindow {
 
     /// Disconnects and notifies the owner. Safe to call more than once.
     fn shutdown(&self) {
+        self.save_placement();
         if let Some(id) = self.resize_timer.take() {
             id.remove();
         }
@@ -626,6 +723,7 @@ impl SessionWindow {
         if let Some(on_close) = self.on_close.borrow_mut().take() {
             on_close();
         }
+        open_sessions::unregister(&self.window);
     }
 
     fn schedule_resize(self: &Rc<Self>) {

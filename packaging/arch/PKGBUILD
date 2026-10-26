@@ -19,6 +19,10 @@ package() {
     install -Dm644 "assets/com.microsoft.windowsapp.linux.desktop" "${pkgdir}/usr/share/applications/com.microsoft.windowsapp.linux.desktop"
     install -Dm644 "assets/com.microsoft.windowsapp.linux.search-provider.ini" "${pkgdir}/usr/share/gnome-shell/search-providers/com.microsoft.windowsapp.linux.search-provider.ini"
     install -Dm644 "assets/com.microsoft.windowsapp.linux.service" "${pkgdir}/usr/share/dbus-1/services/com.microsoft.windowsapp.linux.service"
+    for file in metadata.json extension.js; do
+        install -Dm644 "assets/gnome-shell-extension/windows-app-linux@sudhirdhumal289.github.io/${file}" \
+            "${pkgdir}/usr/share/gnome-shell/extensions/windows-app-linux@sudhirdhumal289.github.io/${file}"
+    done
     install -Dm644 "assets/com.microsoft.windowsapp.linux.svg" "${pkgdir}/usr/share/icons/hicolor/scalable/apps/com.microsoft.windowsapp.linux.svg"
 
     for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do

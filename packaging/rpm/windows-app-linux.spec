@@ -22,10 +22,12 @@ mkdir -p %{buildroot}%{_datadir}/icons/hicolor/scalable/apps
 
 install -m 755 %{_sourcedir}/windows-app-linux %{buildroot}%{_bindir}/windows-app-linux
 install -m 644 %{_sourcedir}/com.microsoft.windowsapp.linux.desktop %{buildroot}%{_datadir}/applications/com.microsoft.windowsapp.linux.desktop
-%{_datadir}/gnome-shell/search-providers/com.microsoft.windowsapp.linux.search-provider.ini
-%{_datadir}/dbus-1/services/com.microsoft.windowsapp.linux.service
 install -Dm 644 %{_sourcedir}/com.microsoft.windowsapp.linux.search-provider.ini %{buildroot}%{_datadir}/gnome-shell/search-providers/com.microsoft.windowsapp.linux.search-provider.ini
 install -Dm 644 %{_sourcedir}/com.microsoft.windowsapp.linux.service %{buildroot}%{_datadir}/dbus-1/services/com.microsoft.windowsapp.linux.service
+for file in metadata.json extension.js; do
+    install -Dm 644 "%{_sourcedir}/gnome-shell-extension/windows-app-linux@sudhirdhumal289.github.io/${file}" \
+        "%{buildroot}%{_datadir}/gnome-shell/extensions/windows-app-linux@sudhirdhumal289.github.io/${file}"
+done
 install -m 644 %{_sourcedir}/com.microsoft.windowsapp.linux.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/com.microsoft.windowsapp.linux.svg
 
 for size in 16x16 24x24 32x32 48x48 64x64 128x128 256x256 512x512; do
@@ -39,6 +41,9 @@ done
 %files
 %{_bindir}/windows-app-linux
 %{_datadir}/applications/com.microsoft.windowsapp.linux.desktop
+%{_datadir}/gnome-shell/search-providers/com.microsoft.windowsapp.linux.search-provider.ini
+%{_datadir}/dbus-1/services/com.microsoft.windowsapp.linux.service
+%{_datadir}/gnome-shell/extensions/windows-app-linux@sudhirdhumal289.github.io/
 %{_datadir}/icons/hicolor/*/apps/com.microsoft.windowsapp.linux.*
 
 %post

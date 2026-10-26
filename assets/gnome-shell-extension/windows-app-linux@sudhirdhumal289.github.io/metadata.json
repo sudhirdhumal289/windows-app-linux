@@ -1,0 +1,8 @@
+{
+  "uuid": "windows-app-linux@sudhirdhumal289.github.io",
+  "name": "Windows App Window Placement",
+  "description": "Lets Windows App for Linux reopen session windows on the workspace they were last on. GNOME on Wayland has no other way for apps to do this. An app can only query and move its own windows.",
+  "shell-version": ["45", "46", "47", "48", "49"],
+  "url": "https://github.com/sudhirdhumal289/windows-app-linux",
+  "version-name": "1"
+}

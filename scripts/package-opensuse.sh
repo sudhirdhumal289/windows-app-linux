@@ -38,6 +38,7 @@ cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.svg" "${RPM_TOPDIR}/SOURCE
 cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.search-provider.ini" "${RPM_TOPDIR}/SOURCES/"
 cp "${ROOT_DIR}/assets/com.microsoft.windowsapp.linux.service" "${RPM_TOPDIR}/SOURCES/"
 cp -r "${ROOT_DIR}/resources/icons" "${RPM_TOPDIR}/SOURCES/"
+cp -r "${ROOT_DIR}/assets/gnome-shell-extension" "${RPM_TOPDIR}/SOURCES/"
 cp "${ROOT_DIR}/packaging/rpm/windows-app-linux-opensuse.spec" "${RPM_TOPDIR}/SPECS/"
 
 if command -v rpmbuild >/dev/null 2>&1; then

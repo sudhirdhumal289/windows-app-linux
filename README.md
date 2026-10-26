@@ -32,6 +32,9 @@ The application directly interoperates with Microsoft Cloud PC and Entra ID endp
 - **Modern GTK 4 / libadwaita User Interface**:
   - Follows the GNOME HIG and the system light/dark theme and accent colour; no custom theming.
   - Grid and list layouts with persistent connection state across layout switches.
+  - **Collapsible sections** in both layouts separate Cloud PCs, Azure Virtual Desktop resources and Remote PCs; collapsed sections are remembered (searching shows matches in every section).
+  - **Quit confirmation**: closing the main window (or Ctrl+Q / **Quit**) while sessions are open asks whether to **Disconnect and Quit** or **Keep Open**, which closes only the main window; the app then exits after the last session window closes.
+  - **About** dialog (main menu) with version, FreeRDP/GTK/libadwaita versions under Troubleshooting, credits, licence and issue link.
   - **Add Connection** button (Ctrl+N) in the header bar: add a Microsoft Cloud PC (signs in to Windows 365) or a Remote PC by address (`host`, `host:port`, `[ipv6]:port`).
   - An empty-state page when no connections exist yet.
   - Per-PC action menus (connect, restart, rename, connection info, details; edit/export/remove for Remote PCs).
@@ -77,6 +80,7 @@ The application directly interoperates with Microsoft Cloud PC and Entra ID endp
   - Clipboard: text, images and files in both directions (files copied in the session are downloaded when pasted).
   - Server certificates you have not seen before can be reviewed and accepted once or permanently (per the connection's certificate policy).
   - Fullscreen with a slide-down dock (Ctrl+Alt+Enter toggles fullscreen).
+  - **Remembers where each session window was**: reopens fullscreen on the same monitor (matched by make/model, then connector). The workspace is restored too: on X11 desktops directly, and on GNOME (Wayland) after turning on **Preferences → Session Windows → Restore Workspaces**, which turns on a small GNOME Shell extension installed with the app packages (Wayland gives apps no way to read or choose a window's workspace; the extension only lets an app query and move its own windows). GNOME Shell discovers extensions only at login, so log out and in once after first installing the package; after that the switch applies immediately. Stored in `~/.config/windows-app-linux/window-placement.json`.
   - Audio, microphone, camera and shared-folder redirection, configured in Preferences: the home or a chosen folder, **more shared folders**, and **removable drives** (USB sticks plugged in during the session appear too).
   - **Connection quality** presets (Automatic, LAN, Broadband, Low Bandwidth) in Preferences or per connection.
   - **Use All Monitors** in fullscreen (one remote monitor per local monitor, MS-RDPEDISP layout).
@@ -106,6 +110,7 @@ frontends can be added without changing the core.
 | `connections` | Saved Remote PCs (direct RDP by address, gateway, RemoteApp, security): validation and storage |
 | `overrides` | Per-connection settings that override the preferences |
 | `history` | When each connection was last used |
+| `placement` | Which monitor and workspace each connection's session window was last on |
 | `rdp_file` | `.rdp` file import and export |
 | `launcher` | Launch targets (`--connect`), launcher/autostart entries and the desktop search index |
 | `session` | Builds the private `.rdp` file and FreeRDP arguments for a session; per-session scale choices, key combinations and typed text |
@@ -238,6 +243,8 @@ cargo run --release
 
 Platform packages bundle the executable binary, the `.desktop` launcher, and multi-resolution vector/raster icons directly into system paths (`/usr/bin`, `/usr/share/applications`, `/usr/share/icons/hicolor`).
 
+The app icon (a white monitor with two-way connection arrows on a blue rounded tile, for Cloud PCs and any RDP host) is drawn in `assets/com.microsoft.windowsapp.linux.svg`. After editing it, run `scripts/render-icons.py` to regenerate the PNG sizes in `resources/icons/`.
+
 Each package automatically specifies **runtime dependencies** so the distribution package manager automatically installs all required shared libraries (`gtk4`, `libadwaita`, `webkitgtk-6.0`, `libsoup-3.0`, `libfreerdp3`, `libwinpr3`) when installing the package.
 
 ### 1. Generating Packages
@@ -318,6 +325,17 @@ windows-app-linux
 # after installing so GNOME Shell picks it up)
 ls /usr/share/gnome-shell/search-providers/com.microsoft.windowsapp.linux.search-provider.ini \
    /usr/share/dbus-1/services/com.microsoft.windowsapp.linux.service
+
+# Workspace restore helper on GNOME (turned on in Preferences)
+gnome-extensions info windows-app-linux@sudhirdhumal289.github.io
+```
+
+When running from a source build instead of a package, install the helper for your user
+(then log out and in once):
+
+```bash
+gnome-extensions pack --force assets/gnome-shell-extension/windows-app-linux@sudhirdhumal289.github.io
+gnome-extensions install --force windows-app-linux@sudhirdhumal289.github.io.shell-extension.zip
 ```
 
 To let USB redirection open a device, grant your user access to it, e.g.

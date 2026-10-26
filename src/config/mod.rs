@@ -132,6 +132,8 @@ pub struct AppConfig {
     pub data_boundary: String,
     /// "grid" or "list".
     pub view_mode: String,
+    /// Main window sections (e.g. "cloud-pcs", "remote-pcs") the user collapsed.
+    pub collapsed_sections: Vec<String>,
     /// See [`AuthProfile`].
     pub auth_profile_index: u32,
     pub enable_audio: bool,
@@ -161,6 +163,7 @@ impl Default for AppConfig {
         Self {
             data_boundary: "commercial".to_string(),
             view_mode: "grid".to_string(),
+            collapsed_sections: Vec::new(),
             auth_profile_index: 0,
             enable_audio: true,
             enable_microphone: true,

@@ -11,7 +11,7 @@ build = "build.rs"
 default = ["gtk"]
 # GTK 4 / libadwaita / WebKitGTK frontend (Linux). Future native frontends (WinUI, AppKit)
 # get their own feature; the core library builds without any of them.
-gtk = ["dep:gtk4", "dep:adw", "dep:webkit6"]
+gtk = ["dep:gtk4", "dep:adw", "dep:webkit6", "dep:gdk4-x11"]
 
 [lib]
 name = "windows_app_linux"
@@ -51,6 +51,10 @@ env_logger = "0.11"
 roxmltree = "0.21"
 keyring = { version = "3", features = ["async-secret-service", "tokio", "crypto-rust", "apple-native", "windows-native"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Workspace placement of session windows on X11 (Wayland has no client API for it).
+gdk4-x11 = { version = "0.11", optional = true }
+
 [profile.release]
 opt-level = 3
 lto = "fat"
@@ -69,6 +73,8 @@ assets = [
     ["assets/com.microsoft.windowsapp.linux.desktop", "usr/share/applications/", "644"],
     ["assets/com.microsoft.windowsapp.linux.search-provider.ini", "usr/share/gnome-shell/search-providers/", "644"],
     ["assets/com.microsoft.windowsapp.linux.service", "usr/share/dbus-1/services/", "644"],
+    ["assets/gnome-shell-extension/windows-app-linux@sudhirdhumal289.github.io/metadata.json", "usr/share/gnome-shell/extensions/windows-app-linux@sudhirdhumal289.github.io/", "644"],
+    ["assets/gnome-shell-extension/windows-app-linux@sudhirdhumal289.github.io/extension.js", "usr/share/gnome-shell/extensions/windows-app-linux@sudhirdhumal289.github.io/", "644"],
     ["assets/com.microsoft.windowsapp.linux.svg", "usr/share/icons/hicolor/scalable/apps/", "644"],
     ["resources/icons/16x16/apps/com.microsoft.windowsapp.linux.png", "usr/share/icons/hicolor/16x16/apps/", "644"],
     ["resources/icons/24x24/apps/com.microsoft.windowsapp.linux.png", "usr/share/icons/hicolor/24x24/apps/", "644"],

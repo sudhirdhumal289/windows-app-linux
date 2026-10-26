@@ -28,6 +28,7 @@ pub mod history;
 pub mod launcher;
 pub mod models;
 pub mod overrides;
+pub mod placement;
 pub mod platform;
 pub mod rdp;
 pub mod rdp_file;

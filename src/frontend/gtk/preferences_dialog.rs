@@ -1,6 +1,7 @@
 //! Preferences dialog for identity profile, display, device redirection and folder sharing.
 //! Display scale is chosen per session from the session window.
 
+use super::gnome_shell::{self, HelperState};
 use crate::config::{AppConfig, AuthProfile, SharedFolder};
 use crate::platform;
 use crate::session::{GraphicsMode, Quality};
@@ -84,6 +85,26 @@ impl PreferencesDialog {
         quality_row.set_subtitle("Visual effects and colour depth for the network in use");
         display_group.add(&quality_row);
         page.add(&display_group);
+
+        // GNOME on Wayland can only restore workspaces through the GNOME Shell helper.
+        let helper_state = Self::is_wayland()
+            .then(gnome_shell::state)
+            .filter(|state| *state != HelperState::Unavailable);
+        let workspace_row = helper_state.map(|state| {
+            let row = Self::switch_row(
+                "Restore Workspaces",
+                Some(Self::helper_subtitle(state)),
+                state.is_enabled(),
+            );
+            row.set_sensitive(state != HelperState::NotInstalled);
+            let group = adw::PreferencesGroup::builder()
+                .title("Session Windows")
+                .build();
+            group.add(&row);
+            page.add(&group);
+            row
+        });
+        let init_workspaces = helper_state.is_some_and(HelperState::is_enabled);
 
         // Section 2: Peripherals & Redirection
         let periph_group = adw::PreferencesGroup::builder()
@@ -258,6 +279,7 @@ impl PreferencesDialog {
             let q = quality_row.clone();
             let hp = hotplug_row.clone();
             let extra = Rc::clone(&extra_folders);
+            let ws = workspace_row.clone();
             Rc::new(move || {
                 let dirty = p_row.selected() != selected_profile
                     || cl.is_active() != init_clipboard
@@ -273,7 +295,10 @@ impl PreferencesDialog {
                     || *usb.borrow() != init_usb
                     || q.selected() != selected_quality
                     || hp.is_active() != init_hotplug
-                    || *extra.borrow() != init_extra;
+                    || *extra.borrow() != init_extra
+                    || ws
+                        .as_ref()
+                        .is_some_and(|ws| ws.is_active() != init_workspaces);
                 save_btn.set_sensitive(dirty);
             })
         };
@@ -293,7 +318,10 @@ impl PreferencesDialog {
             &multimon_row,
             &smartcard_row,
             &printer_row,
-        ] {
+        ]
+        .into_iter()
+        .chain(workspace_row.as_ref())
+        {
             let cd = Rc::clone(&check_dirty);
             row.connect_active_notify(move |_| cd());
         }
@@ -409,6 +437,18 @@ impl PreferencesDialog {
             if let Err(e) = updated_config.save() {
                 log::warn!("Failed to save configuration: {e}");
             }
+            if let Some(row) = workspace_row.as_ref() {
+                if row.is_active() != init_workspaces {
+                    let result = if row.is_active() {
+                        gnome_shell::enable()
+                    } else {
+                        gnome_shell::disable()
+                    };
+                    if let Err(e) = result {
+                        log::warn!("{e}");
+                    }
+                }
+            }
 
             on_save(updated_config);
             dlg_save.close();
@@ -440,6 +480,29 @@ impl PreferencesDialog {
             row.set_subtitle(subtitle);
         }
         row
+    }
+
+    fn is_wayland() -> bool {
+        gtk4::gdk::Display::default()
+            .is_some_and(|display| display.type_().name() == "GdkWaylandDisplay")
+    }
+
+    fn helper_subtitle(state: HelperState) -> &'static str {
+        match state {
+            HelperState::On => "Session windows reopen on the workspace they were last on",
+            HelperState::Pending => "Log out and back in once to finish installing it",
+            HelperState::Blocked => {
+                "GNOME Shell is not running the helper: extensions are turned off or this \
+                 GNOME version is not supported"
+            }
+            HelperState::NotInstalled => {
+                "Needs the GNOME Shell helper that the app packages install"
+            }
+            HelperState::Off | HelperState::Unavailable => {
+                "Reopen session windows on the workspace they were last on, using the \
+                 GNOME Shell helper installed with this app"
+            }
+        }
     }
 
     fn folder_subtitle(path: &str) -> String {

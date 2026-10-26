@@ -4,6 +4,7 @@
 use super::connection_card::{CardAction, CardLayoutMode, ConnectionCard};
 use super::credentials_dialog::{self, SignIn};
 use super::login_dialog::LoginDialog;
+use super::open_sessions;
 use super::preferences_dialog::PreferencesDialog;
 use super::session_window::{SessionWindow, SessionWindowOptions};
 use crate::api::{self, AvdResource, CloudPcService, Snapshot, TroubleshootOutcome};
@@ -15,6 +16,7 @@ use crate::history::{self, RecentStore};
 use crate::launcher::{LaunchEntry, LaunchTarget, SearchIndex};
 use crate::models::{CloudPc, CloudPcAction};
 use crate::overrides::{ConnectionOverrides, OverrideStore};
+use crate::placement::PlacementStore;
 use crate::platform::hooks::{self, HookContext};
 use crate::{platform, rdp, rdp_file, session};
 use adw::prelude::*;
@@ -31,13 +33,23 @@ use std::sync::Arc;
 const SESSION_WIDTH: u32 = 1280;
 const SESSION_HEIGHT: u32 = 800;
 
+/// Ids of the main window sections, remembered in [`AppConfig::collapsed_sections`].
+const SECTION_CLOUD_PCS: &str = "cloud-pcs";
+const SECTION_AVD: &str = "avd";
+const SECTION_REMOTE_PCS: &str = "remote-pcs";
+
+const REPOSITORY_URL: &str = "https://github.com/sudhirdhumal289/windows-app-linux";
+
 pub struct AppMainWindow {
     window: adw::ApplicationWindow,
     stack: Stack,
     empty_page: adw::StatusPage,
     content_stack: Stack,
-    grid_flowbox: FlowBox,
-    list_container: ListBox,
+    /// Section boxes of the grid and list views.
+    grid_sections: Box,
+    list_sections: Box,
+    /// Ids of the collapsed sections.
+    collapsed_sections: RefCell<HashSet<String>>,
     spinner: Spinner,
     status_label: Label,
     auth: Arc<AuthManager>,
@@ -62,6 +74,8 @@ pub struct AppMainWindow {
     search_entry: SearchEntry,
     recent: RecentStore,
     overrides: OverrideStore,
+    /// The user chose what happens to the open sessions, so the window may close.
+    close_confirmed: Cell<bool>,
 }
 
 /// A connection about to start, for hooks, history and the session window.
@@ -92,6 +106,7 @@ impl AppMainWindow {
         app.set_accels_for_action("win.add-connection", &["<Control>n"]);
         app.set_accels_for_action("win.find", &["<Control>f"]);
         app.set_accels_for_action("win.import-rdp", &["<Control>o"]);
+        app.set_accels_for_action("window.close", &["<Control>q"]);
 
         let config = AppConfig::load();
         let initial_mode = if config.view_mode == "list" {
@@ -197,20 +212,8 @@ impl AppMainWindow {
             .hscrollbar_policy(gtk4::PolicyType::Never)
             .vscrollbar_policy(gtk4::PolicyType::Automatic)
             .build();
-        let grid_flowbox = FlowBox::builder()
-            .valign(gtk4::Align::Start)
-            .max_children_per_line(6)
-            .min_children_per_line(1)
-            .selection_mode(gtk4::SelectionMode::None)
-            .column_spacing(16)
-            .row_spacing(16)
-            .homogeneous(true)
-            .margin_start(16)
-            .margin_end(16)
-            .margin_top(16)
-            .margin_bottom(16)
-            .build();
-        grid_scrolled.set_child(Some(&grid_flowbox));
+        let grid_sections = sections_box();
+        grid_scrolled.set_child(Some(&grid_sections));
         content_stack.add_named(&grid_scrolled, Some("grid"));
 
         // valign Start keeps rows compact instead of stretching them vertically.
@@ -218,17 +221,10 @@ impl AppMainWindow {
             .hscrollbar_policy(gtk4::PolicyType::Never)
             .vscrollbar_policy(gtk4::PolicyType::Automatic)
             .build();
-        let list_container = ListBox::new();
-        list_container.add_css_class("boxed-list");
-        list_container.set_selection_mode(gtk4::SelectionMode::None);
-        list_container.set_valign(gtk4::Align::Start);
-        list_container.set_margin_start(16);
-        list_container.set_margin_end(16);
-        list_container.set_margin_top(16);
-        list_container.set_margin_bottom(16);
+        let list_sections = sections_box();
         let list_clamp = adw::Clamp::builder()
             .maximum_size(900)
-            .child(&list_container)
+            .child(&list_sections)
             .build();
         list_scrolled.set_child(Some(&list_clamp));
         content_stack.add_named(&list_scrolled, Some("list"));
@@ -268,8 +264,9 @@ impl AppMainWindow {
             stack,
             empty_page,
             content_stack,
-            grid_flowbox,
-            list_container,
+            grid_sections,
+            list_sections,
+            collapsed_sections: RefCell::new(config.collapsed_sections.iter().cloned().collect()),
             spinner,
             status_label,
             auth,
@@ -292,12 +289,20 @@ impl AppMainWindow {
             search_entry,
             recent: RecentStore::default(),
             overrides: OverrideStore::default(),
+            close_confirmed: Cell::new(false),
         });
 
         // Handlers only hold weak references, so the window state is owned here until the
         // window closes.
         let keep_alive = RefCell::new(Some(Rc::clone(&app_window)));
         app_window.window.connect_close_request(move |_| {
+            let this = keep_alive.borrow().clone();
+            if let Some(this) = this {
+                if !this.close_confirmed.get() && !open_sessions::names().is_empty() {
+                    this.confirm_close();
+                    return glib::Propagation::Stop;
+                }
+            }
             keep_alive.take();
             glib::Propagation::Proceed
         });
@@ -331,6 +336,104 @@ impl AppMainWindow {
 
     pub fn present(&self) {
         self.window.present();
+    }
+
+    /// Asks whether to disconnect the open sessions or keep them running without the
+    /// main window.
+    fn confirm_close(self: &Rc<Self>) {
+        let names = open_sessions::names();
+        let (heading, body) = match names.as_slice() {
+            [name] => (
+                "Disconnect Session?".to_string(),
+                format!(
+                    "{name} is still connected. Quitting disconnects it; keeping it open \
+                     closes only this window."
+                ),
+            ),
+            _ => (
+                format!("Disconnect {} Sessions?", names.len()),
+                format!(
+                    "{} are still connected. Quitting disconnects them; keeping them open \
+                     closes only this window.",
+                    join_names(&names)
+                ),
+            ),
+        };
+        let dialog = adw::AlertDialog::builder()
+            .heading(heading)
+            .body(body)
+            .default_response("cancel")
+            .close_response("cancel")
+            .build();
+        dialog.add_responses(&[
+            ("cancel", "Cancel"),
+            ("keep", "Keep Open"),
+            ("quit", "Disconnect and Quit"),
+        ]);
+        dialog.set_response_appearance("quit", adw::ResponseAppearance::Destructive);
+        // The window may be behind full-screen sessions (e.g. closed from the overview).
+        self.window.present();
+        let weak = Rc::downgrade(self);
+        dialog.connect_response(None, move |_, response| {
+            let Some(this) = weak.upgrade() else { return };
+            match response {
+                "keep" => open_sessions::keep_app_running(),
+                "quit" => open_sessions::close_all(),
+                _ => return,
+            }
+            this.close_confirmed.set(true);
+            this.window.close();
+        });
+        dialog.present(Some(&self.window));
+    }
+
+    fn show_about(&self) {
+        let about = adw::AboutDialog::builder()
+            .application_name("Windows App")
+            .application_icon("com.microsoft.windowsapp.linux")
+            .version(env!("CARGO_PKG_VERSION"))
+            .developer_name("Sudhir Dhumal")
+            .developers(["Sudhir Dhumal"])
+            .copyright("© 2026 Sudhir Dhumal")
+            .license_type(gtk4::License::MitX11)
+            .website(REPOSITORY_URL)
+            .issue_url(format!("{REPOSITORY_URL}/issues"))
+            .comments(
+                "Connect to Windows 365 Cloud PCs, Azure Virtual Desktop and any Remote \
+                 Desktop (RDP) computer.",
+            )
+            .debug_info(format!(
+                "Windows App {}\nFreeRDP {}\nGTK {}.{}.{}\nlibadwaita {}.{}.{}\n",
+                env!("CARGO_PKG_VERSION"),
+                rdp::version(),
+                gtk4::major_version(),
+                gtk4::minor_version(),
+                gtk4::micro_version(),
+                adw::major_version(),
+                adw::minor_version(),
+                adw::micro_version(),
+            ))
+            .build();
+        about.add_credit_section(
+            Some("Built With"),
+            &[
+                "FreeRDP https://www.freerdp.com",
+                "GTK https://www.gtk.org",
+                "libadwaita https://gnome.pages.gitlab.gnome.org/libadwaita/",
+                "gtk-rs https://gtk-rs.org",
+            ],
+        );
+        about.add_legal_section(
+            "Trademarks",
+            None,
+            gtk4::License::Unknown,
+            Some(
+                "Windows, Windows 365 and Azure Virtual Desktop are trademarks of the \
+                 Microsoft group of companies. This app is not affiliated with or endorsed \
+                 by Microsoft.",
+            ),
+        );
+        about.present(Some(&self.window));
     }
 
     /// Connects to `target` now, or once the connection lists have loaded.
@@ -520,6 +623,7 @@ impl AppMainWindow {
         let options_section = gio::Menu::new();
         options_section.append(Some("Add Connection…"), Some("win.add-connection"));
         options_section.append(Some("Preferences"), Some("win.preferences"));
+        options_section.append(Some("About Windows App"), Some("win.about"));
         menu.append_section(None, &options_section);
         if account.is_some() {
             let signout_section = gio::Menu::new();
@@ -527,6 +631,9 @@ impl AppMainWindow {
             signout_section.append(Some("Sign Out"), Some("win.sign-out"));
             menu.append_section(None, &signout_section);
         }
+        let quit_section = gio::Menu::new();
+        quit_section.append(Some("Quit"), Some("window.close"));
+        menu.append_section(None, &quit_section);
 
         let popover = PopoverMenu::from_model(Some(&menu));
         if let Some(account) = account {
@@ -576,6 +683,7 @@ impl AppMainWindow {
         });
         add("preferences", Self::show_preferences);
         add("sign-out", Self::sign_out);
+        add("about", |this| this.show_about());
 
         let switch = gio::SimpleAction::new("switch-account", Some(glib::VariantTy::STRING));
         let weak = Rc::downgrade(self);
@@ -841,18 +949,13 @@ impl AppMainWindow {
     }
 
     fn render_cards(self: &Rc<Self>) {
-        while let Some(child) = self.grid_flowbox.first_child() {
-            self.grid_flowbox.remove(&child);
-        }
-        while let Some(child) = self.list_container.first_child() {
-            self.list_container.remove(&child);
+        for container in [&self.grid_sections, &self.list_sections] {
+            while let Some(child) = container.first_child() {
+                container.remove(&child);
+            }
         }
 
         let mode = *self.current_mode.borrow();
-        let append = |widget: gtk4::Widget| match mode {
-            CardLayoutMode::Grid => self.grid_flowbox.append(&widget),
-            CardLayoutMode::List => self.list_container.append(&widget),
-        };
         let on_action = || {
             let weak = Rc::downgrade(self);
             move |action| {
@@ -870,14 +973,14 @@ impl AppMainWindow {
                 .get(&target.to_string())
                 .map(|when| history::relative_time(*when, now))
         };
-        let mut shown = 0;
+
+        let mut cloud_pcs = Vec::new();
         for pc in self.cached_pcs.borrow().iter() {
             let account = pc.user_principal_name.as_deref().unwrap_or_default();
             if !filter.matches(&[&pc.display_name, account]) {
                 continue;
             }
-            shown += 1;
-            append(ConnectionCard::cloud_pc(
+            cloud_pcs.push(ConnectionCard::cloud_pc(
                 pc,
                 mode,
                 connecting.contains(&pc.id),
@@ -885,13 +988,13 @@ impl AppMainWindow {
                 on_action(),
             ));
         }
+        let mut avd = Vec::new();
         for resource in self.avd_resources.borrow().iter() {
             let folder = resource.folder.as_deref().unwrap_or_default();
             if !filter.matches(&[&resource.title, &resource.workspace, folder]) {
                 continue;
             }
-            shown += 1;
-            append(ConnectionCard::avd_resource(
+            avd.push(ConnectionCard::avd_resource(
                 resource,
                 mode,
                 connecting.contains(&resource.id),
@@ -908,6 +1011,7 @@ impl AppMainWindow {
                 c.display_name().to_lowercase(),
             )
         });
+        let mut remotes = Vec::new();
         for connection in &remote_pcs {
             if !filter.matches(&[
                 connection.display_name(),
@@ -917,13 +1021,29 @@ impl AppMainWindow {
             ]) {
                 continue;
             }
-            shown += 1;
-            append(ConnectionCard::remote_pc(
+            remotes.push(ConnectionCard::remote_pc(
                 connection,
                 mode,
                 last_used(LaunchTarget::RemotePc(connection.id.clone())),
                 on_action(),
             ));
+        }
+
+        let shown = cloud_pcs.len() + avd.len() + remotes.len();
+        let container = match mode {
+            CardLayoutMode::Grid => &self.grid_sections,
+            CardLayoutMode::List => &self.list_sections,
+        };
+        for (id, title, items) in [
+            (SECTION_CLOUD_PCS, "Cloud PCs", cloud_pcs),
+            (SECTION_AVD, "Azure Virtual Desktop", avd),
+            (SECTION_REMOTE_PCS, "Remote PCs", remotes),
+        ] {
+            if !items.is_empty() {
+                // Searching shows every match, even in collapsed sections.
+                let expanded = !filter.is_empty() || !self.collapsed_sections.borrow().contains(id);
+                container.append(&self.section(id, title, mode, expanded, items));
+            }
         }
         if !filter.is_empty() {
             let text = self.search_entry.text();
@@ -934,6 +1054,113 @@ impl AppMainWindow {
                 (n, _) => format!("{n} matches."),
             };
             self.status_label.set_text(&message);
+        }
+    }
+
+    /// A heading that collapses or expands `items`, laid out as cards or as a list.
+    fn section(
+        self: &Rc<Self>,
+        id: &'static str,
+        title: &str,
+        mode: CardLayoutMode,
+        expanded: bool,
+        items: Vec<gtk4::Widget>,
+    ) -> Box {
+        let chevron = Image::from_icon_name(chevron_icon(expanded));
+        let title_label = Label::new(Some(title));
+        title_label.add_css_class("heading");
+        let count_label = Label::new(Some(&items.len().to_string()));
+        count_label.add_css_class("dim-label");
+        count_label.add_css_class("numeric");
+        let heading = Box::new(Orientation::Horizontal, 8);
+        heading.append(&chevron);
+        heading.append(&title_label);
+        heading.append(&count_label);
+        let header = Button::builder()
+            .child(&heading)
+            .halign(gtk4::Align::Start)
+            .tooltip_text(if expanded { "Collapse" } else { "Expand" })
+            .build();
+        header.add_css_class("flat");
+        header.update_state(&[gtk4::accessible::State::Expanded(Some(expanded))]);
+
+        let content: gtk4::Widget = match mode {
+            CardLayoutMode::Grid => {
+                let flowbox = FlowBox::builder()
+                    .valign(gtk4::Align::Start)
+                    .max_children_per_line(6)
+                    .min_children_per_line(1)
+                    .selection_mode(gtk4::SelectionMode::None)
+                    .column_spacing(16)
+                    .row_spacing(16)
+                    .homogeneous(true)
+                    .build();
+                for item in &items {
+                    flowbox.append(item);
+                }
+                flowbox.upcast()
+            }
+            CardLayoutMode::List => {
+                let list = ListBox::new();
+                list.add_css_class("boxed-list");
+                list.set_selection_mode(gtk4::SelectionMode::None);
+                list.set_valign(gtk4::Align::Start);
+                for item in &items {
+                    list.append(item);
+                }
+                list.upcast()
+            }
+        };
+        content.set_margin_top(6);
+        let revealer = gtk4::Revealer::builder()
+            .transition_type(gtk4::RevealerTransitionType::SlideDown)
+            .reveal_child(expanded)
+            .child(&content)
+            .build();
+
+        let weak = Rc::downgrade(self);
+        let revealer_ref = revealer.downgrade();
+        let chevron_ref = chevron.downgrade();
+        header.connect_clicked(move |header| {
+            let (Some(this), Some(revealer), Some(chevron)) = (
+                weak.upgrade(),
+                revealer_ref.upgrade(),
+                chevron_ref.upgrade(),
+            ) else {
+                return;
+            };
+            let expanded = !revealer.reveals_child();
+            revealer.set_reveal_child(expanded);
+            chevron.set_icon_name(Some(chevron_icon(expanded)));
+            header.set_tooltip_text(Some(if expanded { "Collapse" } else { "Expand" }));
+            header.update_state(&[gtk4::accessible::State::Expanded(Some(expanded))]);
+            this.set_section_collapsed(id, !expanded);
+        });
+
+        let section = Box::new(Orientation::Vertical, 0);
+        section.append(&header);
+        section.append(&revealer);
+        section
+    }
+
+    fn set_section_collapsed(&self, id: &str, collapsed: bool) {
+        let changed = {
+            let mut sections = self.collapsed_sections.borrow_mut();
+            if collapsed {
+                sections.insert(id.to_string())
+            } else {
+                sections.remove(id)
+            }
+        };
+        if !changed {
+            return;
+        }
+        let mut config = AppConfig::load();
+        let mut ids: Vec<String> = self.collapsed_sections.borrow().iter().cloned().collect();
+        ids.sort();
+        config.collapsed_sections = ids;
+        if let Err(e) = config.save() {
+            log::warn!("Could not save the collapsed sections: {e}");
         }
     }
 
@@ -1152,6 +1379,7 @@ impl AppMainWindow {
             login_hint: launch.login_hint.clone(),
             multi_monitor: launch.multi_monitor,
             dynamic_resolution: launch.dynamic_resolution,
+            remember_placement: launch.target.clone(),
         };
         let name = launch.name.clone();
         SessionWindow::open(&name, options, prepared, move || {
@@ -1456,6 +1684,9 @@ impl AppMainWindow {
                     }
                     if let Err(e) = this.recent.remove(&target) {
                         log::warn!("Could not remove the connection history: {e}");
+                    }
+                    if let Err(e) = PlacementStore::default().remove(&target) {
+                        log::warn!("Could not remove the session window placement: {e}");
                     }
                     this.update_search_index();
                 }
@@ -1953,6 +2184,34 @@ impl SearchFilter {
         self.0
             .iter()
             .all(|term| fields.iter().any(|field| field.contains(term.as_str())))
+    }
+}
+
+/// Vertical box holding the main window sections.
+fn sections_box() -> Box {
+    let sections = Box::new(Orientation::Vertical, 18);
+    sections.set_valign(gtk4::Align::Start);
+    sections.set_margin_start(16);
+    sections.set_margin_end(16);
+    sections.set_margin_top(12);
+    sections.set_margin_bottom(16);
+    sections
+}
+
+fn chevron_icon(expanded: bool) -> &'static str {
+    if expanded {
+        "pan-down-symbolic"
+    } else {
+        "pan-end-symbolic"
+    }
+}
+
+/// "A", "A and B", "A, B and C".
+fn join_names(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
