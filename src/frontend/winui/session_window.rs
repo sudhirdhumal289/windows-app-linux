@@ -413,8 +413,11 @@ fn handle_message(
             match wparam.0 {
                 TIMER_RESIZE => resize_now(hwnd, session),
                 TIMER_TITLE => {
-                    session.borrow_mut().note = None;
-                    update_title(hwnd, session);
+                    if let Ok(mut s) = session.try_borrow_mut() {
+                        s.note = None;
+                        drop(s);
+                        update_title(hwnd, session);
+                    }
                 }
                 _ => {}
             }
@@ -450,7 +453,9 @@ fn handle_message(
             handled
         }
         WM_KILLFOCUS => {
-            session.borrow_mut().controller.release_input();
+            if let Ok(mut s) = session.try_borrow_mut() {
+                s.controller.release_input();
+            }
             handled
         }
         WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP => {
@@ -620,11 +625,13 @@ fn ask_certificate(hwnd: HWND, session: &Rc<RefCell<Session>>, prompt: &Certific
         .collect();
     // Default to "Connect Once" for unknown certificates, "Cancel" for changed ones.
     let default = if text.changed { 0 } else { 1 };
+    let name = session.borrow().name.clone();
+    let body = text.body();
     let choice = win32::choose(
         Some(hwnd),
-        &session.borrow().name.clone(),
+        &name,
         text.heading,
-        &text.body(),
+        &body,
         &labels,
         default,
         text.changed,
@@ -633,7 +640,9 @@ fn ask_certificate(hwnd: HWND, session: &Rc<RefCell<Session>>, prompt: &Certific
         .and_then(|i| CERTIFICATE_ANSWERS.get(i))
         .map_or(CertificateDecision::Reject, |(decision, _)| *decision);
     session.borrow().controller.answer_certificate(decision);
-    session.borrow_mut().note = None;
+    if let Ok(mut s) = session.try_borrow_mut() {
+        s.note = None;
+    }
     update_title(hwnd, session);
 }
 
@@ -641,7 +650,9 @@ fn ask_certificate(hwnd: HWND, session: &Rc<RefCell<Session>>, prompt: &Certific
 
 fn update_title(hwnd: HWND, session: &Rc<RefCell<Session>>) {
     let title = {
-        let s = session.borrow();
+        let Ok(s) = session.try_borrow() else {
+            return;
+        };
         let mut title = s.name.clone();
         let subtitle = match (&s.note, s.controller.state()) {
             (Some(note), _) => note.clone(),
@@ -869,17 +880,18 @@ fn focus_in(hwnd: HWND, session: &Rc<RefCell<Session>>) {
 fn sync_local_clipboard(hwnd: HWND, session: &Rc<RefCell<Session>>, force: bool) {
     let sequence = win32::clipboard_sequence();
     {
-        let mut s = session.borrow_mut();
+        let Ok(mut s) = session.try_borrow_mut() else {
+            return;
+        };
         if s.controller.bridge().is_none() || (!force && s.clipboard_sequence == sequence) {
             return;
         }
         s.clipboard_sequence = sequence;
     }
     if let Some(text) = win32::clipboard_text(hwnd).filter(|t| !t.is_empty()) {
-        session
-            .borrow()
-            .controller
-            .set_local_clipboard(LocalClipboard::Text(text));
+        if let Ok(s) = session.try_borrow() {
+            s.controller.set_local_clipboard(LocalClipboard::Text(text));
+        }
     }
 }
 
@@ -917,7 +929,11 @@ fn key(
     let scan = ((lparam.0 >> 16) & 0xFF) as u32;
     let extended = (lparam.0 >> 24) & 1 != 0;
     match rdp_scancode_from_win32(scan, extended) {
-        Some(code) => session.borrow_mut().controller.key(code, down),
+        Some(code) => {
+            if let Ok(mut s) = session.try_borrow_mut() {
+                s.controller.key(code, down);
+            }
+        }
         None => log::debug!("No scancode for key {:#x} (scan {scan:#x})", wparam.0),
     }
     Some(LRESULT(0))
@@ -929,11 +945,13 @@ fn pointer_moved(hwnd: HWND, session: &Rc<RefCell<Session>>, lparam: LPARAM) {
     if width <= 0 || height <= 0 {
         return;
     }
-    session.borrow_mut().controller.pointer_moved(
-        f64::from(x),
-        f64::from(y),
-        (f64::from(width), f64::from(height)),
-    );
+    if let Ok(mut s) = session.try_borrow_mut() {
+        s.controller.pointer_moved(
+            f64::from(x),
+            f64::from(y),
+            (f64::from(width), f64::from(height)),
+        );
+    }
 }
 
 fn mouse_button(
@@ -970,7 +988,9 @@ fn mouse_button(
         // SAFETY: releases the capture taken above.
         let _ = unsafe { ReleaseCapture() };
     }
-    session.borrow_mut().controller.button(button, down);
+    if let Ok(mut s) = session.try_borrow_mut() {
+        s.controller.button(button, down);
+    }
 }
 
 // ----- Size, full screen and monitors -----
