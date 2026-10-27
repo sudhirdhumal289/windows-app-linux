@@ -21,6 +21,13 @@
 #include <freerdp/event.h>
 #include <freerdp/freerdp.h>
 #include <freerdp/gdi/gdi.h>
+#include <freerdp/channels/rdpgfx.h>
+#include <freerdp/client/rdpgfx.h>
+#include <freerdp/codec/h264.h>
+#include <freerdp/gdi/gfx.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 #include <freerdp/input.h>
 #include <freerdp/scancode.h>
 #include <freerdp/settings_keys.h>
@@ -174,6 +181,10 @@ typedef struct {
     /* Whether a surface frame is actively being decoded between BEGIN and END markers. */
     BOOL in_surface_frame;
 
+    /* RDPGFX hardware video acceleration hooks */
+    pcRdpgfxCreateSurface orig_gfx_create_surface;
+    pcRdpgfxSurfaceCommand orig_gfx_surface_command;
+
     /* Why the last connection attempt was refused (static string); session thread only. */
     const char* failure_hint;
 } BridgeClientContext;
@@ -281,10 +292,45 @@ static void bridge_init_windows_environment(void) {
 }
 #endif
 
+static void bridge_configure_hardware_video_acceleration(void) {
+#if defined(__linux__)
+    if (!getenv("FREERDP_HWCTX_TYPE")) {
+        /* On Linux, check for standard DRI render node for VA-API */
+        if (access("/dev/dri/renderD128", R_OK | W_OK) == 0) {
+            (void)setenv("FREERDP_HWCTX_TYPE", "vaapi", 0);
+            (void)setenv("FREERDP_HWCTX_DEVICE", "/dev/dri/renderD128", 0);
+            WLog_Print(bridge_log(), WLOG_INFO,
+                       "Configured hardware video acceleration: VA-API (/dev/dri/renderD128)");
+        } else {
+            (void)setenv("FREERDP_HWCTX_TYPE", "vaapi", 0);
+            WLog_Print(bridge_log(), WLOG_INFO,
+                       "Configured hardware video acceleration: VA-API (default device)");
+        }
+    }
+#elif defined(_WIN32)
+    bridge_sync_crt_env("FREERDP_HWCTX_TYPE");
+    bridge_sync_crt_env("FREERDP_HWCTX_DEVICE");
+    if (!getenv("FREERDP_HWCTX_TYPE")) {
+        /* On Windows, use Direct3D 11 Video Acceleration (D3D11VA) */
+        _putenv_s("FREERDP_HWCTX_TYPE", "d3d11va");
+        WLog_Print(bridge_log(), WLOG_INFO,
+                   "Configured hardware video acceleration: Direct3D 11 Video (D3D11VA)");
+    }
+#elif defined(__APPLE__)
+    if (!getenv("FREERDP_HWCTX_TYPE")) {
+        /* On macOS, use Apple VideoToolbox hardware acceleration */
+        (void)setenv("FREERDP_HWCTX_TYPE", "videotoolbox", 0);
+        WLog_Print(bridge_log(), WLOG_INFO,
+                   "Configured hardware video acceleration: Apple VideoToolbox");
+    }
+#endif
+}
+
 static void bridge_init_logging(void) {
 #if defined(_WIN32)
     bridge_init_windows_environment();
 #endif
+    bridge_configure_hardware_video_acceleration();
     wLog* root = WLog_GetRoot();
     if (root && !getenv("WLOG_LEVEL")) {
         WLog_SetLogLevel(root, WLOG_WARN);
@@ -514,6 +560,49 @@ static DWORD bridge_verify_changed_certificate(freerdp* instance, const char* ho
 
 /* ---- Graphics -------------------------------------------------------------------------- */
 
+static UINT bridge_rdpgfx_create_surface(RdpgfxClientContext* context,
+                                         const RDPGFX_CREATE_SURFACE_PDU* createSurface) {
+    if (!context) return CHANNEL_RC_NULL_DATA;
+    BridgeClientContext* bctx = (BridgeClientContext*)context->custom;
+    UINT rc = CHANNEL_RC_OK;
+    if (bctx && bctx->orig_gfx_create_surface) {
+        rc = bctx->orig_gfx_create_surface(context, createSurface);
+    }
+    if (rc == CHANNEL_RC_OK && context->GetSurfaceData && createSurface) {
+        gdiGfxSurface* surface =
+            (gdiGfxSurface*)context->GetSurfaceData(context, createSurface->surfaceId);
+        if (surface && surface->h264) {
+            (void)h264_context_set_option(surface->h264, H264_CONTEXT_OPTION_HW_ACCEL, 1);
+            WLog_Print(bridge_log(), WLOG_INFO,
+                       "Enabled hardware video acceleration on surface %u (H.264 context: %p)",
+                       (unsigned)createSurface->surfaceId, (void*)surface->h264);
+        }
+    }
+    return rc;
+}
+
+static UINT bridge_rdpgfx_surface_command(RdpgfxClientContext* context,
+                                          const RDPGFX_SURFACE_COMMAND* cmd) {
+    if (!context) return CHANNEL_RC_NULL_DATA;
+    BridgeClientContext* bctx = (BridgeClientContext*)context->custom;
+    UINT rc = CHANNEL_RC_OK;
+    if (bctx && bctx->orig_gfx_surface_command) {
+        rc = bctx->orig_gfx_surface_command(context, cmd);
+    }
+    if (rc == CHANNEL_RC_OK && context->GetSurfaceData && cmd) {
+        gdiGfxSurface* surface =
+            (gdiGfxSurface*)context->GetSurfaceData(context, (UINT16)cmd->surfaceId);
+        if (surface && surface->h264 &&
+            !h264_context_get_option(surface->h264, H264_CONTEXT_OPTION_HW_ACCEL)) {
+            (void)h264_context_set_option(surface->h264, H264_CONTEXT_OPTION_HW_ACCEL, 1);
+            WLog_Print(bridge_log(), WLOG_INFO,
+                       "Enabled hardware video acceleration on surface %u for codec %u",
+                       (unsigned)cmd->surfaceId, (unsigned)cmd->codecId);
+        }
+    }
+    return rc;
+}
+
 static HGDI_WND bridge_primary_hwnd(rdpGdi* gdi) {
     if (!gdi || !gdi->primary || !gdi->primary->hdc) return NULL;
     return gdi->primary->hdc->hwnd;
@@ -637,6 +726,12 @@ static BOOL bridge_post_connect(freerdp* instance) {
     context->update->EndPaint = bridge_end_paint;
     context->update->DesktopResize = bridge_desktop_resize;
     context->update->SurfaceFrameMarker = bridge_surface_frame_marker;
+
+    if (context->codecs && context->codecs->h264) {
+        (void)h264_context_set_option(context->codecs->h264, H264_CONTEXT_OPTION_HW_ACCEL, 1);
+        WLog_Print(bridge_log(), WLOG_INFO,
+                   "Enabled hardware-accelerated video decoding on primary H.264 codec context");
+    }
 
     BridgeClientContext* bctx = (BridgeClientContext*)context;
     bridge_set_input_ready(bctx, TRUE);
@@ -1231,6 +1326,20 @@ static void bridge_on_channel_connected(void* context, const ChannelConnectedEve
         bctx->cliprdr = cliprdr;
         bctx->remote_requests_pending = 0;
         bridge_mutex_unlock(&bctx->work_lock);
+    } else if (e->name && (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0 ||
+                           strcmp(e->name, RDPGFX_CHANNEL_NAME) == 0)) {
+        freerdp_client_OnChannelConnectedEventHandler(context, e);
+        RdpgfxClientContext* gfx = (RdpgfxClientContext*)e->pInterface;
+        if (gfx) {
+            gfx->custom = bctx;
+            bctx->orig_gfx_create_surface = gfx->CreateSurface;
+            gfx->CreateSurface = bridge_rdpgfx_create_surface;
+            bctx->orig_gfx_surface_command = gfx->SurfaceCommand;
+            gfx->SurfaceCommand = bridge_rdpgfx_surface_command;
+            WLog_Print(bridge_log(), WLOG_INFO,
+                       "Hooked RDPGFX graphics pipeline for hardware-accelerated video decoding");
+        }
+        return;
     }
     freerdp_client_OnChannelConnectedEventHandler(context, e);
 }
@@ -1240,7 +1349,11 @@ static void bridge_on_channel_disconnected(void* context, const ChannelDisconnec
     BridgeFileRequest dropped[MAX_FILE_REQUESTS];
     UINT32 dropped_count = 0;
     bridge_mutex_lock(&bctx->work_lock);
-    if (e->name && strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
+    if (e->name && (strcmp(e->name, RDPGFX_DVC_CHANNEL_NAME) == 0 ||
+                           strcmp(e->name, RDPGFX_CHANNEL_NAME) == 0)) {
+        bctx->orig_gfx_create_surface = NULL;
+        bctx->orig_gfx_surface_command = NULL;
+    } else if (e->name && strcmp(e->name, DISP_DVC_CHANNEL_NAME) == 0) {
         bctx->disp = NULL;
         bctx->disp_ready = FALSE;
     } else if (e->name && strcmp(e->name, CLIPRDR_SVC_CHANNEL_NAME) == 0 && bctx->cliprdr) {
@@ -1422,6 +1535,18 @@ static BOOL bridge_parse_args(rdpContext* ctx, const char* const* args, int argc
         !freerdp_settings_set_bool(settings, FreeRDP_RemoteFxCodec, TRUE)) {
         return FALSE;
     }
+    /* Explicitly disable SoftwareGdi so FreeRDP enables hardware acceleration on codecs */
+    (void)freerdp_settings_set_bool(settings, FreeRDP_SoftwareGdi, FALSE);
+    /* Enable Video Optimized Remoting [MS-RDPEVOR] for redirected media streaming */
+    (void)freerdp_settings_set_bool(settings, FreeRDP_SupportVideoOptimized, TRUE);
+
+    if (freerdp_settings_get_bool(settings, FreeRDP_SupportGraphicsPipeline)) {
+        (void)freerdp_settings_set_bool(settings, FreeRDP_GfxH264, TRUE);
+        (void)freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444, TRUE);
+        (void)freerdp_settings_set_bool(settings, FreeRDP_GfxAVC444v2, TRUE);
+        (void)freerdp_settings_set_bool(settings, FreeRDP_GfxSendQoeAck, TRUE);
+    }
+
     if (!freerdp_settings_set_bool(settings, FreeRDP_SupportDisplayControl, TRUE) ||
         !freerdp_settings_set_bool(settings, FreeRDP_DynamicResolutionUpdate, TRUE)) {
         return FALSE;

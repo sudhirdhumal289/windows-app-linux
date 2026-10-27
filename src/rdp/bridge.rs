@@ -1069,6 +1069,23 @@ pub fn supports_usb_redirection() -> bool {
     *SUPPORTED.get_or_init(|| unsafe { ffi::freerdp_bridge_accepts_option(c"/usb:auto".as_ptr()) })
 }
 
+/// Returns the hardware acceleration decoder backend hooked into FreeRDP:
+/// - "VA-API" on Linux
+/// - "Direct3D 11 Video (D3D11VA)" on Windows
+/// - "VideoToolbox" on macOS
+#[must_use]
+pub fn hardware_video_decoder_backend() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "VA-API"
+    } else if cfg!(windows) {
+        "Direct3D 11 Video (D3D11VA)"
+    } else if cfg!(target_os = "macos") {
+        "VideoToolbox"
+    } else {
+        "Software"
+    }
+}
+
 /// Whether the FreeRDP build includes camera redirection support (`[MS-RDPECAM]`).
 #[must_use]
 pub fn supports_camera() -> bool {
@@ -1433,6 +1450,18 @@ mod tests {
             "{:?}",
             crate::session::redact_args(&prepared.args)
         );
+    }
+
+    #[test]
+    fn hardware_video_decoder_backend_is_non_empty() {
+        let backend = hardware_video_decoder_backend();
+        assert!(!backend.is_empty());
+        #[cfg(target_os = "linux")]
+        assert_eq!(backend, "VA-API");
+        #[cfg(windows)]
+        assert_eq!(backend, "Direct3D 11 Video (D3D11VA)");
+        #[cfg(target_os = "macos")]
+        assert_eq!(backend, "VideoToolbox");
     }
 
     #[test]

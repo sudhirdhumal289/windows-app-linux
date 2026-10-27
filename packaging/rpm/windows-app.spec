@@ -1,5 +1,5 @@
 Name:           windows-app
-Version:        0.2.2
+Version:        0.2.3
 Release:        1%{?dist}
 Summary:        Native client for Windows 365, Azure Virtual Desktop and Remote Desktop
 License:        Apache-2.0 OR MIT
