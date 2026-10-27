@@ -1,9 +1,8 @@
 //! Content dialogs of the main window: messages and reports, property sheets,
 //! confirmations, text and choice prompts, and the About dialog.
 //!
-//! The main window shows one dialog at a time from its queue. Each dialog is a component
-//! that owns its field state and reports one [`Outcome`] through its `done` callback when
-//! the user closes it.
+//! The main window shows one dialog at a time from its queue. Each dialog owns its
+//! field state and reports one [`Outcome`] when closed.
 
 use windows_reactor::*;
 
@@ -85,36 +84,62 @@ pub enum Outcome {
     Overrides(ConnectionOverrides),
 }
 
-/// The component showing `spec`; `done` receives the outcome once.
-pub fn view(spec: &DialogSpec, done: Callback<Outcome>) -> View {
-    match spec {
-        DialogSpec::Credentials {
-            connection,
-            can_remember,
-            known,
-        } => View::component::<forms::CredentialsDialog>(forms::CredentialsInput {
-            connection: connection.clone(),
-            can_remember: *can_remember,
-            known: known.clone(),
-            done,
-        }),
-        DialogSpec::RemotePc { existing } => {
-            View::component::<forms::RemotePcDialog>(forms::RemotePcInput {
-                existing: existing.clone(),
-                done,
-            })
+/// Messages routed to dialogs.
+#[derive(Clone)]
+pub enum DialogMsg {
+    Simple(SimpleMsg),
+    Credentials(forms::CredentialsMsg),
+    RemotePc(forms::RemotePcMsg),
+    Settings(forms::SettingsMsg),
+}
+
+/// Currently active dialog state mounted directly in the main window view.
+pub enum ActiveDialog {
+    Simple(SimpleDialog),
+    Credentials(forms::CredentialsDialog),
+    RemotePc(forms::RemotePcDialog),
+    Settings(forms::SettingsDialog),
+}
+
+impl ActiveDialog {
+    pub fn new(spec: &DialogSpec) -> Self {
+        match spec {
+            DialogSpec::Credentials {
+                connection,
+                can_remember,
+                known,
+            } => Self::Credentials(forms::CredentialsDialog::new(
+                connection.clone(),
+                *can_remember,
+                known.clone(),
+            )),
+            DialogSpec::RemotePc { existing } => {
+                Self::RemotePc(forms::RemotePcDialog::new(existing.clone()))
+            }
+            DialogSpec::ConnectionSettings { name, current } => {
+                Self::Settings(forms::SettingsDialog::new(name.clone(), current.clone()))
+            }
+            _ => Self::Simple(SimpleDialog::new(spec.clone())),
         }
-        DialogSpec::ConnectionSettings { name, current } => {
-            View::component::<forms::SettingsDialog>(forms::SettingsInput {
-                name: name.clone(),
-                current: current.clone(),
-                done,
-            })
+    }
+
+    pub fn update(&mut self, msg: DialogMsg) -> Option<Outcome> {
+        match (self, msg) {
+            (Self::Simple(d), DialogMsg::Simple(m)) => d.update(m),
+            (Self::Credentials(d), DialogMsg::Credentials(m)) => d.update(m),
+            (Self::RemotePc(d), DialogMsg::RemotePc(m)) => d.update(m),
+            (Self::Settings(d), DialogMsg::Settings(m)) => d.update(m),
+            _ => None,
         }
-        _ => View::component::<SimpleDialog>(SimpleInput {
-            spec: spec.clone(),
-            done,
-        }),
+    }
+
+    pub fn view(&self, ctx: &ViewContext<super::app::MainApp>) -> View {
+        match self {
+            Self::Simple(d) => d.view(ctx),
+            Self::Credentials(d) => d.view(ctx),
+            Self::RemotePc(d) => d.view(ctx),
+            Self::Settings(d) => d.view(ctx),
+        }
     }
 }
 
@@ -161,12 +186,6 @@ pub fn hint_text(text: &str, error: bool) -> TextBlock {
 
 // ----- Simple dialogs -----
 
-#[derive(Clone, PartialEq)]
-pub struct SimpleInput {
-    spec: DialogSpec,
-    done: Callback<Outcome>,
-}
-
 #[derive(Clone)]
 pub enum SimpleMsg {
     Text(String),
@@ -174,15 +193,36 @@ pub enum SimpleMsg {
     Closed(ContentDialogResult),
 }
 
+fn simple_cb<E: 'static>(
+    ctx: &ViewContext<super::app::MainApp>,
+    f: impl Fn(E) -> SimpleMsg + 'static,
+) -> Callback<E> {
+    ctx.callback(move |e| {
+        super::app::Msg::Dialog(DialogMsg::Simple(f(e)))
+    })
+}
+
 pub struct SimpleDialog {
     spec: DialogSpec,
-    done: Callback<Outcome>,
     text: String,
     selected: usize,
     closed: bool,
 }
 
 impl SimpleDialog {
+    pub fn new(spec: DialogSpec) -> Self {
+        let text = match &spec {
+            DialogSpec::Text { initial, .. } => initial.clone(),
+            _ => String::new(),
+        };
+        Self {
+            spec,
+            text,
+            selected: 0,
+            closed: false,
+        }
+    }
+
     fn can_confirm(&self) -> bool {
         match &self.spec {
             DialogSpec::Text {
@@ -203,6 +243,26 @@ impl SimpleDialog {
             DialogSpec::Text { .. } => Outcome::Text(self.text.trim().to_string()),
             DialogSpec::Choice { .. } => Outcome::Index(self.selected),
             _ => Outcome::Confirmed,
+        }
+    }
+
+    pub fn update(&mut self, msg: SimpleMsg) -> Option<Outcome> {
+        match msg {
+            SimpleMsg::Text(text) => {
+                self.text = text;
+                None
+            }
+            SimpleMsg::Selected(index) => {
+                self.selected = index.unwrap_or(usize::MAX);
+                None
+            }
+            SimpleMsg::Closed(result) => {
+                if self.closed {
+                    return None;
+                }
+                self.closed = true;
+                Some(self.outcome(result))
+            }
         }
     }
 
@@ -245,41 +305,9 @@ impl SimpleDialog {
             hint_text(TRADEMARKS, false),
         ))
     }
-}
 
-impl Component for SimpleDialog {
-    type Input = SimpleInput;
-    type Message = SimpleMsg;
-
-    fn create(input: &Self::Input, _ctx: &ComponentContext<Self>) -> Self {
-        let text = match &input.spec {
-            DialogSpec::Text { initial, .. } => initial.clone(),
-            _ => String::new(),
-        };
-        Self {
-            spec: input.spec.clone(),
-            done: input.done.clone(),
-            text,
-            selected: 0,
-            closed: false,
-        }
-    }
-
-    fn update(&mut self, msg: Self::Message, _ctx: &ComponentContext<Self>) {
-        match msg {
-            SimpleMsg::Text(text) => self.text = text,
-            SimpleMsg::Selected(index) => self.selected = index.unwrap_or(usize::MAX),
-            SimpleMsg::Closed(result) => {
-                if !self.closed {
-                    self.closed = true;
-                    let _ = self.done.call(self.outcome(result));
-                }
-            }
-        }
-    }
-
-    fn view(&self, _input: &Self::Input, ctx: &mut ViewContext<Self>) -> View {
-        let on_closed = ctx.callback(SimpleMsg::Closed);
+    pub fn view(&self, ctx: &ViewContext<super::app::MainApp>) -> View {
+        let on_closed = simple_cb(ctx, SimpleMsg::Closed);
         let open = !self.closed;
         match &self.spec {
             DialogSpec::Message { title, body } => shell(
@@ -345,7 +373,7 @@ impl Component for SimpleDialog {
                     body_text(body),
                     TextBox::new()
                         .text(self.text.as_str())
-                        .on_text_changed(ctx.callback(SimpleMsg::Text))
+                        .on_text_changed(simple_cb(ctx, SimpleMsg::Text))
                         .slot(TextBoxSlot::Header, label.as_str()),
                 )),
             ),
@@ -368,7 +396,7 @@ impl Component for SimpleDialog {
                         .items_source(options.iter().cloned())
                         .selected_index(self.selected.min(options.len().saturating_sub(1)))
                         .horizontal_alignment(HorizontalAlignment::Stretch)
-                        .on_selection_changed(ctx.callback(SimpleMsg::Selected))
+                        .on_selection_changed(simple_cb(ctx, SimpleMsg::Selected))
                         .slot(ComboBoxSlot::Header, label.as_str()),
                 )),
             ),

@@ -524,16 +524,26 @@ pub fn account_button(
         person_picture.into()
     };
 
-    Button::new()
-        .style(ButtonStyle::Subtle)
-        .horizontal_alignment(if is_pane_open {
-            HorizontalAlignment::Stretch
-        } else {
-            HorizontalAlignment::Center
-        })
-        .horizontal_content_alignment(HorizontalAlignment::Left)
-        .margin(Thickness::xy(4.0, 4.0))
-        .content(content)
-        .menu(Menu::new(menu, ctx.callback(Msg::AccountMenu)))
-        .into()
+    if is_pane_open {
+        Button::new()
+            .style(ButtonStyle::Subtle)
+            .horizontal_alignment(HorizontalAlignment::Stretch)
+            .horizontal_content_alignment(HorizontalAlignment::Left)
+            .margin(Thickness::xy(4.0, 4.0))
+            .content(content)
+            .menu(Menu::new(menu, ctx.callback(Msg::AccountMenu)))
+            .into()
+    } else {
+        Button::new()
+            .style(ButtonStyle::Subtle)
+            .horizontal_alignment(HorizontalAlignment::Center)
+            .horizontal_content_alignment(HorizontalAlignment::Center)
+            .vertical_content_alignment(VerticalAlignment::Center)
+            .margin(Thickness::uniform(0.0))
+            .width(40.0)
+            .height(40.0)
+            .content(content)
+            .menu(Menu::new(menu, ctx.callback(Msg::AccountMenu)))
+            .into()
+    }
 }

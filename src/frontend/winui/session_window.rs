@@ -646,7 +646,7 @@ fn update_title(hwnd: HWND, session: &Rc<RefCell<Session>>) {
         let subtitle = match (&s.note, s.controller.state()) {
             (Some(note), _) => note.clone(),
             (None, SessionState::Connected) => String::new(),
-            (None, state) => state.subtitle().to_string(),
+            (None, state) => state.title_subtitle().to_string(),
         };
         if !subtitle.is_empty() {
             title.push_str(" – ");

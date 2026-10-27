@@ -30,10 +30,22 @@ pub enum SessionState {
 }
 
 impl SessionState {
-    /// Subtitle of the session window.
+    /// Concise subtitle for window title bars so errors don't overflow the title bar.
+    #[must_use]
+    pub fn title_subtitle(&self) -> &str {
+        match self {
+            Self::Connecting(_) => "Connecting...",
+            Self::Connected => "",
+            Self::Ended(message) if message.is_empty() => "Disconnected",
+            Self::Ended(_) => "Connection failed",
+        }
+    }
+
+    /// Full detailed status for placeholder / in-window display.
     #[must_use]
     pub fn subtitle(&self) -> &str {
         match self {
+            Self::Connecting(message) if message.is_empty() => "Connecting...",
             Self::Connecting(message) => message,
             Self::Connected => "Connected",
             Self::Ended(message) if message.is_empty() => "Disconnected",

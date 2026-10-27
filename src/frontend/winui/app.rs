@@ -80,7 +80,7 @@ pub enum Msg {
     AccountMenu(String),
     ItemMenu(LaunchTarget, String),
     Connect(LaunchTarget),
-    DialogDone(Outcome),
+    Dialog(dialogs::DialogMsg),
     ShowAbout,
     Prepared {
         id: String,
@@ -165,6 +165,7 @@ pub struct MainApp {
     list_mode: bool,
     status: Option<Status>,
     dialogs: VecDeque<Queued>,
+    active_dialog: Option<dialogs::ActiveDialog>,
     next_serial: u64,
     pending_target: Option<LaunchTarget>,
     account: Option<Account>,
@@ -194,12 +195,16 @@ impl MainApp {
     }
 
     fn queue(&mut self, spec: DialogSpec, purpose: Purpose) {
+        let is_first = self.dialogs.is_empty();
         self.next_serial += 1;
         self.dialogs.push_back(Queued {
             serial: self.next_serial,
-            spec,
+            spec: spec.clone(),
             purpose,
         });
+        if is_first || self.active_dialog.is_none() {
+            self.active_dialog = Some(dialogs::ActiveDialog::new(&spec));
+        }
     }
 
     fn show_message(&mut self, title: impl Into<String>, body: impl Into<String>) {
@@ -1023,6 +1028,7 @@ impl MainApp {
         let Some(Queued { purpose, .. }) = self.dialogs.pop_front() else {
             return;
         };
+        self.active_dialog = self.dialogs.front().map(|q| dialogs::ActiveDialog::new(&q.spec));
         match (purpose, outcome) {
             (_, Outcome::Cancelled) | (Purpose::Info, _) => {}
             (Purpose::Restart(pc), Outcome::Confirmed) => {
@@ -1334,6 +1340,7 @@ impl Component for MainApp {
             list_mode: config.view_mode == "list",
             status: None,
             dialogs: VecDeque::new(),
+            active_dialog: None,
             next_serial: 0,
             pending_target: None,
             account: None,
@@ -1414,7 +1421,13 @@ impl Component for MainApp {
             Msg::AccountMenu(label) => self.account_chosen(&label, ctx),
             Msg::ItemMenu(target, label) => self.item_action(&target, &label, ctx),
             Msg::Connect(target) => self.connect(&target, ctx),
-            Msg::DialogDone(outcome) => self.dialog_done(outcome, ctx),
+            Msg::Dialog(dialog_msg) => {
+                if let Some(active) = &mut self.active_dialog {
+                    if let Some(outcome) = active.update(dialog_msg) {
+                        self.dialog_done(outcome, ctx);
+                    }
+                }
+            }
             Msg::ShowAbout => self.queue(DialogSpec::About, Purpose::Info),
             Msg::Prepared { id, result } => {
                 self.busy.remove(&id);
@@ -1527,10 +1540,10 @@ impl Component for MainApp {
             .title(APP_NAME)
             .slots([SlotView::new(TitleBarSlot::Content, search_box)]);
 
-        let dialog_view = if let Some(dialog) = self.dialogs.front() {
+        let dialog_view = if let (Some(dialog), Some(active)) = (self.dialogs.front(), &self.active_dialog) {
             KeyedView::new(
                 dialog.serial,
-                dialogs::view(&dialog.spec, ctx.callback(Msg::DialogDone)),
+                active.view(ctx),
             )
         } else {
             KeyedView::new("dialog_idle", ContentDialog::new().is_open(false))

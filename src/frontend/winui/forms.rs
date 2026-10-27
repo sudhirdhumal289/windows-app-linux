@@ -4,7 +4,7 @@
 
 use windows_reactor::*;
 
-use super::dialogs::{body_text, hint_text, shell, Outcome};
+use super::dialogs::{body_text, hint_text, shell, DialogMsg, Outcome};
 use crate::config::AppConfig;
 use crate::connections::{
     AddressError, AuthMethod, CertificatePolicy, Gateway, RemoteApp, SavedConnection,
@@ -18,6 +18,39 @@ pub const GRAPHICS_MODES: [(GraphicsMode, &str); 2] = [
     (GraphicsMode::Auto, "Automatic (H.264 / AVC444)"),
     (GraphicsMode::RemoteFx, "RemoteFX (low latency LAN)"),
 ];
+
+fn cred_cb<E: 'static>(
+    ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
+    f: impl Fn(E) -> CredentialsMsg + 'static,
+) -> Callback<E> {
+    ctx.callback(move |e| {
+        crate::frontend::winui::app::Msg::Dialog(
+            DialogMsg::Credentials(f(e)),
+        )
+    })
+}
+
+fn remote_cb<E: 'static>(
+    ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
+    f: impl Fn(E) -> RemotePcMsg + 'static,
+) -> Callback<E> {
+    ctx.callback(move |e| {
+        crate::frontend::winui::app::Msg::Dialog(
+            DialogMsg::RemotePc(f(e)),
+        )
+    })
+}
+
+fn settings_cb<E: 'static>(
+    ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
+    f: impl Fn(E) -> SettingsMsg + 'static,
+) -> Callback<E> {
+    ctx.callback(move |e| {
+        crate::frontend::winui::app::Msg::Dialog(
+            DialogMsg::Settings(f(e)),
+        )
+    })
+}
 
 fn section_title(text: &str) -> TextBlock {
     TextBlock::new()
@@ -73,15 +106,6 @@ fn pick<T: Copy + Default>(all: &[T], index: usize) -> T {
 
 // ----- Credentials -----
 
-#[derive(Clone, PartialEq)]
-pub struct CredentialsInput {
-    pub connection: SavedConnection,
-    /// Whether the connection is saved (only saved connections keep passwords).
-    pub can_remember: bool,
-    pub known: Credentials,
-    pub done: Callback<Outcome>,
-}
-
 #[derive(Clone)]
 pub enum CredentialsMsg {
     Username(String),
@@ -92,47 +116,57 @@ pub enum CredentialsMsg {
 }
 
 pub struct CredentialsDialog {
-    input: CredentialsInput,
-    username: String,
-    password: String,
-    gateway: String,
-    remember: bool,
-    closed: bool,
+    pub connection: SavedConnection,
+    pub can_remember: bool,
+    pub username: String,
+    pub password: String,
+    pub gateway: String,
+    pub remember: bool,
+    pub closed: bool,
 }
 
-impl Component for CredentialsDialog {
-    type Input = CredentialsInput;
-    type Message = CredentialsMsg;
-
-    fn create(input: &Self::Input, _ctx: &ComponentContext<Self>) -> Self {
+impl CredentialsDialog {
+    pub fn new(connection: SavedConnection, can_remember: bool, known: Credentials) -> Self {
         Self {
-            username: input.connection.username.clone(),
-            password: input.known.password.clone().unwrap_or_default(),
-            gateway: input.known.gateway_password.clone().unwrap_or_default(),
-            remember: input.connection.remember_password,
-            input: input.clone(),
+            username: connection.username.clone(),
+            password: known.password.clone().unwrap_or_default(),
+            gateway: known.gateway_password.clone().unwrap_or_default(),
+            remember: connection.remember_password,
+            connection,
+            can_remember,
             closed: false,
         }
     }
 
-    fn update(&mut self, msg: Self::Message, _ctx: &ComponentContext<Self>) {
+    pub fn update(&mut self, msg: CredentialsMsg) -> Option<Outcome> {
         match msg {
-            CredentialsMsg::Username(text) => self.username = text,
-            CredentialsMsg::Password(text) => self.password = text,
-            CredentialsMsg::Gateway(text) => self.gateway = text,
-            CredentialsMsg::Remember(on) => self.remember = on,
+            CredentialsMsg::Username(text) => {
+                self.username = text;
+                None
+            }
+            CredentialsMsg::Password(text) => {
+                self.password = text;
+                None
+            }
+            CredentialsMsg::Gateway(text) => {
+                self.gateway = text;
+                None
+            }
+            CredentialsMsg::Remember(on) => {
+                self.remember = on;
+                None
+            }
             CredentialsMsg::Closed(result) => {
                 if self.closed {
-                    return;
+                    return None;
                 }
                 self.closed = true;
                 if result != ContentDialogResult::Primary {
-                    let _ = self.input.done.call(Outcome::Cancelled);
-                    return;
+                    return Some(Outcome::Cancelled);
                 }
-                let mut connection = self.input.connection.clone();
+                let mut connection = self.connection.clone();
                 connection.username = self.username.trim().to_string();
-                connection.remember_password = self.input.can_remember && self.remember;
+                connection.remember_password = self.can_remember && self.remember;
                 let non_empty = |text: &str| Some(text.to_string()).filter(|t| !t.is_empty());
                 let credentials = Credentials {
                     password: non_empty(&self.password),
@@ -141,17 +175,17 @@ impl Component for CredentialsDialog {
                 };
                 self.password.clear();
                 self.gateway.clear();
-                let _ = self.input.done.call(Outcome::Credentials {
+                Some(Outcome::Credentials {
                     connection,
                     credentials,
-                });
+                })
             }
         }
     }
 
-    fn view(&self, _input: &Self::Input, ctx: &mut ViewContext<Self>) -> View {
-        let connection = &self.input.connection;
-        let body = if self.input.can_remember {
+    pub fn view(&self, ctx: &ViewContext<crate::frontend::winui::app::MainApp>) -> View {
+        let connection = &self.connection;
+        let body = if self.can_remember {
             format!("Sign in to {}.", connection.address)
         } else {
             format!(
@@ -166,7 +200,7 @@ impl Component for CredentialsDialog {
                 text_field(
                     "Username",
                     &self.username,
-                    ctx.callback(CredentialsMsg::Username),
+                    cred_cb(ctx, CredentialsMsg::Username),
                     true,
                 ),
             ),
@@ -175,7 +209,7 @@ impl Component for CredentialsDialog {
                 password_field(
                     "Password",
                     &self.password,
-                    ctx.callback(CredentialsMsg::Password),
+                    cred_cb(ctx, CredentialsMsg::Password),
                 ),
             ),
         ];
@@ -185,18 +219,18 @@ impl Component for CredentialsDialog {
                 password_field(
                     "Gateway password",
                     &self.gateway,
-                    ctx.callback(CredentialsMsg::Gateway),
+                    cred_cb(ctx, CredentialsMsg::Gateway),
                 ),
             ));
         }
-        if self.input.can_remember {
+        if self.can_remember {
             fields.push((
                 "remember",
                 check(
                     "Remember password",
                     self.remember,
                     true,
-                    ctx.callback(CredentialsMsg::Remember),
+                    cred_cb(ctx, CredentialsMsg::Remember),
                 ),
             ));
         }
@@ -206,7 +240,7 @@ impl Component for CredentialsDialog {
             true,
             "Cancel",
             !self.closed,
-            ctx.callback(CredentialsMsg::Closed),
+            cred_cb(ctx, CredentialsMsg::Closed),
             StackPanel::new()
                 .spacing(12.0)
                 .min_width(360.0)
@@ -216,12 +250,6 @@ impl Component for CredentialsDialog {
 }
 
 // ----- Remote PC -----
-
-#[derive(Clone, PartialEq)]
-pub struct RemotePcInput {
-    pub existing: Option<SavedConnection>,
-    pub done: Callback<Outcome>,
-}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Field {
@@ -263,7 +291,6 @@ pub enum RemotePcMsg {
 pub struct RemotePcDialog {
     base: SavedConnection,
     editing: bool,
-    done: Callback<Outcome>,
     address: String,
     name: String,
     username: String,
@@ -285,6 +312,36 @@ pub struct RemotePcDialog {
 }
 
 impl RemotePcDialog {
+    pub fn new(existing: Option<SavedConnection>) -> Self {
+        let base = existing
+            .clone()
+            .unwrap_or_else(SavedConnection::blank);
+        let gateway = base.gateway.clone().unwrap_or_default();
+        let app = base.remote_app.clone().unwrap_or_default();
+        Self {
+            editing: existing.is_some(),
+            address: base.address.clone(),
+            name: base.name.clone(),
+            username: base.username.clone(),
+            domain: base.domain.clone(),
+            group: base.group.clone(),
+            remember: base.remember_password,
+            use_gateway: base.gateway.is_some(),
+            gateway_address: gateway.address,
+            separate_gateway: gateway.separate_credentials,
+            gateway_user: gateway.username,
+            use_remote_app: base.remote_app.is_some(),
+            program: app.program,
+            arguments: app.arguments,
+            admin: base.admin_session,
+            security: index_of(&SecurityProtocol::ALL, &base.security),
+            certificate: index_of(&CertificatePolicy::ALL, &base.certificate),
+            auth: index_of(&AuthMethod::ALL, &base.auth),
+            base,
+            closed: false,
+        }
+    }
+
     fn collect(&self) -> Result<SavedConnection, AddressError> {
         let mut connection = self.base.clone();
         connection.update(&self.name, &self.address, &self.username)?;
@@ -336,26 +393,26 @@ impl RemotePcDialog {
         }
     }
 
-    fn text(&self, ctx: &ViewContext<Self>, field: Field, label: &str, enabled: bool) -> View {
+    fn text(&self, ctx: &ViewContext<crate::frontend::winui::app::MainApp>, field: Field, label: &str, enabled: bool) -> View {
         text_field(
             label,
             self.field(field),
-            ctx.callback(move |text| RemotePcMsg::Text(field, text)),
+            remote_cb(ctx, move |text| RemotePcMsg::Text(field, text)),
             enabled,
         )
     }
 
-    fn flag(&self, ctx: &ViewContext<Self>, flag: Flag, label: &str, checked: bool) -> View {
+    fn flag(&self, ctx: &ViewContext<crate::frontend::winui::app::MainApp>, flag: Flag, label: &str, checked: bool) -> View {
         check(
             label,
             checked,
             true,
-            ctx.callback(move |on| RemotePcMsg::Flag(flag, on)),
+            remote_cb(ctx, move |on| RemotePcMsg::Flag(flag, on)),
         )
     }
 
     fn pick_view<T: Copy>(
-        ctx: &ViewContext<Self>,
+        ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
         which: Pick,
         label: &str,
         all: &[T],
@@ -366,57 +423,26 @@ impl RemotePcDialog {
             label,
             all.iter().map(|v| name(*v).to_string()).collect(),
             selected,
-            ctx.callback(move |index| RemotePcMsg::Pick(which, index)),
+            remote_cb(ctx, move |index| RemotePcMsg::Pick(which, index)),
         )
     }
-}
 
-impl Component for RemotePcDialog {
-    type Input = RemotePcInput;
-    type Message = RemotePcMsg;
-
-    fn create(input: &Self::Input, _ctx: &ComponentContext<Self>) -> Self {
-        let base = input
-            .existing
-            .clone()
-            .unwrap_or_else(SavedConnection::blank);
-        let gateway = base.gateway.clone().unwrap_or_default();
-        let app = base.remote_app.clone().unwrap_or_default();
-        Self {
-            editing: input.existing.is_some(),
-            done: input.done.clone(),
-            address: base.address.clone(),
-            name: base.name.clone(),
-            username: base.username.clone(),
-            domain: base.domain.clone(),
-            group: base.group.clone(),
-            remember: base.remember_password,
-            use_gateway: base.gateway.is_some(),
-            gateway_address: gateway.address,
-            separate_gateway: gateway.separate_credentials,
-            gateway_user: gateway.username,
-            use_remote_app: base.remote_app.is_some(),
-            program: app.program,
-            arguments: app.arguments,
-            admin: base.admin_session,
-            security: index_of(&SecurityProtocol::ALL, &base.security),
-            certificate: index_of(&CertificatePolicy::ALL, &base.certificate),
-            auth: index_of(&AuthMethod::ALL, &base.auth),
-            base,
-            closed: false,
-        }
-    }
-
-    fn update(&mut self, msg: Self::Message, _ctx: &ComponentContext<Self>) {
+    pub fn update(&mut self, msg: RemotePcMsg) -> Option<Outcome> {
         match msg {
-            RemotePcMsg::Text(field, text) => *self.field_mut(field) = text,
-            RemotePcMsg::Flag(flag, on) => match flag {
-                Flag::Remember => self.remember = on,
-                Flag::UseGateway => self.use_gateway = on,
-                Flag::SeparateGateway => self.separate_gateway = on,
-                Flag::UseRemoteApp => self.use_remote_app = on,
-                Flag::Admin => self.admin = on,
-            },
+            RemotePcMsg::Text(field, text) => {
+                *self.field_mut(field) = text;
+                None
+            }
+            RemotePcMsg::Flag(flag, on) => {
+                match flag {
+                    Flag::Remember => self.remember = on,
+                    Flag::UseGateway => self.use_gateway = on,
+                    Flag::SeparateGateway => self.separate_gateway = on,
+                    Flag::UseRemoteApp => self.use_remote_app = on,
+                    Flag::Admin => self.admin = on,
+                }
+                None
+            }
             RemotePcMsg::Pick(which, index) => {
                 let index = index.unwrap_or(0);
                 match which {
@@ -424,10 +450,11 @@ impl Component for RemotePcDialog {
                     Pick::Certificate => self.certificate = index,
                     Pick::Auth => self.auth = index,
                 }
+                None
             }
             RemotePcMsg::Closed(result) => {
                 if self.closed {
-                    return;
+                    return None;
                 }
                 self.closed = true;
                 let outcome = match (result, self.collect()) {
@@ -436,12 +463,12 @@ impl Component for RemotePcDialog {
                     }
                     _ => Outcome::Cancelled,
                 };
-                let _ = self.done.call(outcome);
+                Some(outcome)
             }
         }
     }
 
-    fn view(&self, _input: &Self::Input, ctx: &mut ViewContext<Self>) -> View {
+    pub fn view(&self, ctx: &ViewContext<crate::frontend::winui::app::MainApp>) -> View {
         let result = self.collect();
         // Nothing typed yet is not an error worth showing.
         let error = result
@@ -605,7 +632,7 @@ impl Component for RemotePcDialog {
             result.is_ok(),
             "Cancel",
             !self.closed,
-            ctx.callback(RemotePcMsg::Closed),
+            remote_cb(ctx, RemotePcMsg::Closed),
             ScrollViewer::new().content(
                 StackPanel::new()
                     .spacing(10.0)
@@ -618,13 +645,6 @@ impl Component for RemotePcDialog {
 }
 
 // ----- Connection settings -----
-
-#[derive(Clone, PartialEq)]
-pub struct SettingsInput {
-    pub name: String,
-    pub current: ConnectionOverrides,
-    pub done: Callback<Outcome>,
-}
 
 /// On/off settings that can follow the preferences.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -716,7 +736,6 @@ pub enum SettingsMsg {
 
 pub struct SettingsDialog {
     name: String,
-    done: Callback<Outcome>,
     config: AppConfig,
     sizes: Vec<Resolution>,
     overrides: ConnectionOverrides,
@@ -727,6 +746,26 @@ pub struct SettingsDialog {
 }
 
 impl SettingsDialog {
+    pub fn new(name: String, current: ConnectionOverrides) -> Self {
+        let mut sizes: Vec<Resolution> = Resolution::PRESETS.to_vec();
+        if let Some(size) = current.resolution.filter(|s| !sizes.contains(s)) {
+            sizes.push(size);
+        }
+        let resolution = current
+            .resolution
+            .and_then(|r| sizes.iter().position(|s| *s == r))
+            .map_or(0, |i| i + 1);
+        Self {
+            name,
+            config: AppConfig::load(),
+            sizes,
+            overrides: current,
+            resolution,
+            custom: String::new(),
+            closed: false,
+        }
+    }
+
     fn custom_index(&self) -> usize {
         self.sizes.len() + 1
     }
@@ -764,7 +803,7 @@ impl SettingsDialog {
             .collect()
     }
 
-    fn toggle_view(&self, ctx: &ViewContext<Self>, toggle: Toggle, label: &str) -> View {
+    fn toggle_view(&self, ctx: &ViewContext<crate::frontend::winui::app::MainApp>, toggle: Toggle, label: &str) -> View {
         let mut overrides = self.overrides.clone();
         let current = *toggle.slot(&mut overrides);
         combo(
@@ -775,73 +814,61 @@ impl SettingsDialog {
                 "Off".to_string(),
             ],
             tri_index(current),
-            ctx.callback(move |index| SettingsMsg::Toggle(toggle, index)),
+            settings_cb(ctx, move |index| SettingsMsg::Toggle(toggle, index)),
         )
     }
-}
 
-impl Component for SettingsDialog {
-    type Input = SettingsInput;
-    type Message = SettingsMsg;
-
-    fn create(input: &Self::Input, _ctx: &ComponentContext<Self>) -> Self {
-        let mut sizes: Vec<Resolution> = Resolution::PRESETS.to_vec();
-        if let Some(size) = input.current.resolution.filter(|s| !sizes.contains(s)) {
-            sizes.push(size);
-        }
-        let resolution = input
-            .current
-            .resolution
-            .and_then(|r| sizes.iter().position(|s| *s == r))
-            .map_or(0, |i| i + 1);
-        Self {
-            name: input.name.clone(),
-            done: input.done.clone(),
-            config: AppConfig::load(),
-            sizes,
-            overrides: input.current.clone(),
-            resolution,
-            custom: String::new(),
-            closed: false,
-        }
-    }
-
-    fn update(&mut self, msg: Self::Message, _ctx: &ComponentContext<Self>) {
+    pub fn update(&mut self, msg: SettingsMsg) -> Option<Outcome> {
         match msg {
-            SettingsMsg::Resolution(index) => self.resolution = index.unwrap_or(0),
-            SettingsMsg::CustomSize(text) => self.custom = text,
+            SettingsMsg::Resolution(index) => {
+                self.resolution = index.unwrap_or(0);
+                None
+            }
+            SettingsMsg::CustomSize(text) => {
+                self.custom = text;
+                None
+            }
             SettingsMsg::Graphics(index) => {
                 self.overrides.graphics_mode = index
                     .and_then(|i| i.checked_sub(1))
                     .and_then(|i| GRAPHICS_MODES.get(i))
                     .map(|(m, _)| m.id().to_string());
+                None
             }
             SettingsMsg::Quality(index) => {
                 self.overrides.quality = index
                     .and_then(|i| i.checked_sub(1))
                     .and_then(|i| Quality::ALL.get(i))
                     .map(|q| q.id().to_string());
+                None
             }
             SettingsMsg::Toggle(toggle, index) => {
                 *toggle.slot(&mut self.overrides) = tri_value(index.unwrap_or(0));
+                None
             }
-            SettingsMsg::PreCommand(text) => self.overrides.pre_command = text,
-            SettingsMsg::PostCommand(text) => self.overrides.post_command = text,
+            SettingsMsg::PreCommand(text) => {
+                self.overrides.pre_command = text;
+                None
+            }
+            SettingsMsg::PostCommand(text) => {
+                self.overrides.post_command = text;
+                None
+            }
             SettingsMsg::Closed(result) => {
                 if self.closed {
-                    return;
+                    return None;
                 }
                 self.closed = true;
                 let outcome = match (result, self.collect()) {
                     (ContentDialogResult::Primary, Ok(overrides)) => Outcome::Overrides(overrides),
                     _ => Outcome::Cancelled,
                 };
-                let _ = self.done.call(outcome);
+                Some(outcome)
             }
         }
     }
 
-    fn view(&self, _input: &Self::Input, ctx: &mut ViewContext<Self>) -> View {
+    pub fn view(&self, ctx: &ViewContext<crate::frontend::winui::app::MainApp>) -> View {
         let result = self.collect();
         let mut size_labels = vec!["Fit window".to_string()];
         size_labels.extend(self.sizes.iter().map(ToString::to_string));
@@ -867,7 +894,7 @@ impl Component for SettingsDialog {
                     "Resolution (a fixed size is scaled to the window)",
                     size_labels,
                     self.resolution,
-                    ctx.callback(SettingsMsg::Resolution),
+                    settings_cb(ctx, SettingsMsg::Resolution),
                 ),
             ),
         ];
@@ -877,7 +904,7 @@ impl Component for SettingsDialog {
                 text_field(
                     "Custom size, e.g. 1920x1080",
                     &self.custom,
-                    ctx.callback(SettingsMsg::CustomSize),
+                    settings_cb(ctx, SettingsMsg::CustomSize),
                     true,
                 ),
             ));
@@ -889,7 +916,7 @@ impl Component for SettingsDialog {
                     "Graphics",
                     self.graphics_options(),
                     graphics,
-                    ctx.callback(SettingsMsg::Graphics),
+                    settings_cb(ctx, SettingsMsg::Graphics),
                 ),
             ),
             (
@@ -898,7 +925,7 @@ impl Component for SettingsDialog {
                     "Connection quality",
                     self.quality_options(),
                     quality,
-                    ctx.callback(SettingsMsg::Quality),
+                    settings_cb(ctx, SettingsMsg::Quality),
                 ),
             ),
             (
@@ -942,7 +969,7 @@ impl Component for SettingsDialog {
                 text_field(
                     "Before connecting",
                     &self.overrides.pre_command,
-                    ctx.callback(SettingsMsg::PreCommand),
+                    settings_cb(ctx, SettingsMsg::PreCommand),
                     true,
                 ),
             ),
@@ -951,7 +978,7 @@ impl Component for SettingsDialog {
                 text_field(
                     "After disconnecting",
                     &self.overrides.post_command,
-                    ctx.callback(SettingsMsg::PostCommand),
+                    settings_cb(ctx, SettingsMsg::PostCommand),
                     true,
                 ),
             ),
@@ -966,7 +993,7 @@ impl Component for SettingsDialog {
             result.is_ok(),
             "Cancel",
             !self.closed,
-            ctx.callback(SettingsMsg::Closed),
+            settings_cb(ctx, SettingsMsg::Closed),
             ScrollViewer::new().content(
                 StackPanel::new()
                     .spacing(10.0)
