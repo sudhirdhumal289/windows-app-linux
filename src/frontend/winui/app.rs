@@ -1466,7 +1466,7 @@ impl Component for MainApp {
         ctx.window_title(APP_NAME);
         ctx.window_visuals(
             WindowVisuals::new()
-                .backdrop(WindowBackdrop::Mica)
+                .backdrop(WindowBackdrop::None)
                 .client_size(1100.0, 720.0)
                 .constraints(WindowConstraints {
                     min_width: Some(640.0),
@@ -1506,19 +1506,22 @@ impl Component for MainApp {
                 SlotView::new(NavigationViewSlot::Content, content),
             ]);
 
-        let title_bar = TitleBar::new().title(APP_NAME).slot(
-            TitleBarSlot::Content,
-            AutoSuggestBox::new()
-                .width(360.0)
-                .vertical_alignment(VerticalAlignment::Center)
-                .placeholder_text("Search or enter a PC name to connect")
-                .items_source(self.suggestions())
-                .on_text_changed(ctx.callback(Msg::Search))
-                .on_suggestion_chosen(ctx.callback(Msg::Search)),
-        );
+        let top_bar = Border::new()
+            .grid_row(0)
+            .padding(Thickness::xy(16.0, 8.0))
+            .content(
+                AutoSuggestBox::new()
+                    .width(360.0)
+                    .horizontal_alignment(HorizontalAlignment::Left)
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .placeholder_text("Search or enter a PC name to connect")
+                    .items_source(self.suggestions())
+                    .on_text_changed(ctx.callback(Msg::Search))
+                    .on_suggestion_chosen(ctx.callback(Msg::Search)),
+            );
 
         let mut children: Vec<KeyedView> = vec![
-            KeyedView::new("titlebar", title_bar),
+            KeyedView::new("topbar", top_bar),
             KeyedView::new("navigation", navigation),
         ];
         if let Some(dialog) = self.dialogs.front() {

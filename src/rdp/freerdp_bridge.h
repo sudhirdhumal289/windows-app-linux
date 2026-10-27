@@ -52,7 +52,7 @@ typedef void (*RdpBridgeStatusCallback)(void* user_data, int status_code, const 
 
 /* Remote clipboard content passed to on_clipboard. */
 typedef enum {
-    RDP_BRIDGE_CLIP_CHANGED = 0,   /* the host announced new clipboard content (data is NULL);
+    RDP_BRIDGE_CLIP_CHANGED = 0,   /* the host announced new clipboard content (data is NULL;
                                     * earlier remote content, file lists included, is stale */
     RDP_BRIDGE_CLIP_TEXT = 1,      /* CF_UNICODETEXT (UTF-16LE) */
     RDP_BRIDGE_CLIP_DIB = 2,       /* CF_DIB */
@@ -152,6 +152,9 @@ const char* freerdp_bridge_build_config(void);
 /* Whether this FreeRDP build's command line accepts `option` (e.g. "/usb:auto"); options
  * of channels that were not compiled in are unknown and would fail the whole session. */
 bool freerdp_bridge_accepts_option(const char* option);
+
+/* Whether this FreeRDP build was compiled with camera redirection support [MS-RDPECAM]. */
+bool freerdp_bridge_supports_camera(void);
 
 /* Parses `args` (argv[0] included) like the FreeRDP command line. Returns NULL on failure. */
 RdpBridgeContext* freerdp_bridge_create(const char* const* args, int argc,

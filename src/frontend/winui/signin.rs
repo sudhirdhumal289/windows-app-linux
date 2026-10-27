@@ -577,7 +577,7 @@ impl Component for AccountSignIn {
         ctx.window_title(format!("Sign in - {APP_NAME}"));
         ctx.window_visuals(
             WindowVisuals::new()
-                .backdrop(WindowBackdrop::Mica)
+                .backdrop(WindowBackdrop::None)
                 .client_size(520.0, 720.0)
                 .constraints(WindowConstraints {
                     min_width: Some(400.0),
@@ -805,7 +805,7 @@ impl Component for HostSignIn {
         ctx.window_title(format!("{} - {}", SessionHostSignIn::TITLE, self.name));
         ctx.window_visuals(
             WindowVisuals::new()
-                .backdrop(WindowBackdrop::Mica)
+                .backdrop(WindowBackdrop::None)
                 .client_size(480.0, 640.0),
         );
         {
@@ -944,7 +944,7 @@ impl Component for ScaleWindow {
         ctx.window_title(format!("Display Scale - {}", self.name));
         ctx.window_visuals(
             WindowVisuals::new()
-                .backdrop(WindowBackdrop::Mica)
+                .backdrop(WindowBackdrop::None)
                 .client_size(380.0, 220.0),
         );
         StackPanel::new()

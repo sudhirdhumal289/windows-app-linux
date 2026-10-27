@@ -1069,6 +1069,13 @@ pub fn supports_usb_redirection() -> bool {
     *SUPPORTED.get_or_init(|| unsafe { ffi::freerdp_bridge_accepts_option(c"/usb:auto".as_ptr()) })
 }
 
+/// Whether the FreeRDP build includes camera redirection support (`[MS-RDPECAM]`).
+#[must_use]
+pub fn supports_camera() -> bool {
+    static SUPPORTED: OnceLock<bool> = OnceLock::new();
+    *SUPPORTED.get_or_init(|| unsafe { ffi::freerdp_bridge_supports_camera() })
+}
+
 /// Whether `option` is `ON` in a FreeRDP build configuration string.
 fn build_option_enabled(config: &str, option: &str) -> bool {
     config

@@ -17,7 +17,7 @@ pub mod input;
 pub mod keymap;
 
 pub use bridge::{
-    join_pending_teardowns, supports_h264, supports_surface_protection, supports_usb_redirection,
+    join_pending_teardowns, supports_camera, supports_h264, supports_surface_protection, supports_usb_redirection,
     version, BridgeEvent, BridgeOptions, CertificateDecision, CertificatePrompt, ConnectionQuality,
     EventSink, Frame, MonitorRect, NativeRdpBridge, NetworkStats, RemoteFileFetcher, SessionStatus,
 };

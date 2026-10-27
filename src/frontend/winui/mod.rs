@@ -85,11 +85,18 @@ fn configure_bundled_openssl() {
             if let Some(dir) = exe.parent() {
                 let modules = dir.join("ossl-modules");
                 if modules.is_dir() {
-                    std::env::set_var("OPENSSL_MODULES", modules);
+                    std::env::set_var("OPENSSL_MODULES", &modules);
+                } else if dir.join("legacy.dll").is_file() {
+                    std::env::set_var("OPENSSL_MODULES", dir);
                 }
             }
         }
     }
+}
+
+/// Shows a modal error message box before exiting.
+pub fn show_fatal_error(message: &str) {
+    win32::message(None, "Windows App - Fatal Error", message, win32::Icon::Error);
 }
 
 /// Runs the app until its main window closes.

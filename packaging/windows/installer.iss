@@ -48,8 +48,8 @@ Name: "associaterdp"; Description: "Associate with Remote Desktop (.rdp) files";
 Source: "..\..\target\windows-package\Windows App\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\AppIcon.ico"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\AppIcon.ico"; Tasks: desktopicon
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\AppIcon.ico"; WorkingDir: "{app}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; IconFilename: "{app}\AppIcon.ico"; Tasks: desktopicon; WorkingDir: "{app}" 
 
 [Registry]
 Root: HKA; Subkey: "Software\Classes\.rdp\OpenWithProgids"; ValueType: string; ValueName: "WindowsApp.Rdp"; ValueData: ""; Flags: uninsdeletevalue; Tasks: associaterdp
@@ -58,4 +58,4 @@ Root: HKA; Subkey: "Software\Classes\WindowsApp.Rdp\DefaultIcon"; ValueType: str
 Root: HKA; Subkey: "Software\Classes\WindowsApp.Rdp\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExeName}"" ""%1"""; Tasks: associaterdp
 
 [Run]
-Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(AppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent; WorkingDir: "{app}"

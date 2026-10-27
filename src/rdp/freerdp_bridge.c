@@ -702,17 +702,19 @@ static DWORD WINAPI bridge_client_thread(LPVOID arg) {
     if (!freerdp_connect(instance)) {
         UINT32 error = freerdp_get_last_error(context);
         const char* reason = freerdp_get_last_error_string(error);
+        static BRIDGE_THREAD_LOCAL char detail[512];
         if (bctx->failure_hint) {
             reason = bctx->failure_hint;
-        } else if (error == FREERDP_ERROR_SUCCESS) {
-            /* No error code: the logged cause beats "Success". */
-            static BRIDGE_THREAD_LOCAL char detail[300];
-            if (g_last_log_error[0] != '\0') {
+        } else if (g_last_log_error[0] != '\0') {
+            if (error == FREERDP_ERROR_SUCCESS) {
                 (void)snprintf(detail, sizeof(detail), "Connection failed: %s", g_last_log_error);
-                reason = detail;
             } else {
-                reason = "Connection failed";
+                (void)snprintf(detail, sizeof(detail), "%s (%s)",
+                               reason ? reason : "Connection failed", g_last_log_error);
             }
+            reason = detail;
+        } else if (!reason) {
+            reason = "Connection failed";
         }
         WLog_Print(bridge_log(), WLOG_ERROR, "Connection failed: 0x%08X %s", error,
                    reason ? reason : "");
@@ -1250,6 +1252,14 @@ bool freerdp_bridge_accepts_option(const char* option) {
     freerdp_settings_free(settings);
     bridge_mutex_unlock(&g_context_lock);
     return ok;
+}
+
+bool freerdp_bridge_supports_camera(void) {
+#if defined(CHANNEL_RDPECAM_CLIENT)
+    return true;
+#else
+    return false;
+#endif
 }
 
 static BOOL bridge_parse_args(rdpContext* ctx, const char* const* args, int argc) {

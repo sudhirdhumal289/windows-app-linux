@@ -504,7 +504,7 @@ fn build_args(target: &Target<'_>, opts: &SessionOptions) -> Vec<String> {
     if opts.microphone {
         args.push(audio_arg("microphone"));
     }
-    if opts.camera {
+    if opts.camera && crate::rdp::supports_camera() && matches!(target, Target::Direct { .. }) {
         args.push("/dvc:rdpecam".to_string());
     }
     if opts.quality == Quality::Modem {
@@ -876,7 +876,6 @@ mod tests {
             "/scale-device:140",
             "+clipboard",
             "+auto-reconnect",
-            "/dvc:rdpecam",
             "/drive:Shared,/home/u/Shared Docs",
             "/u:a@b.com",
             "/gfx:AVC444",
@@ -889,6 +888,19 @@ mod tests {
         }
         assert!(args.contains(&audio_arg("sound")));
         assert!(!args.iter().any(|a| a.starts_with("/microphone")));
+    }
+
+    #[test]
+    fn direct_camera_argument() {
+        let conn = SavedConnection::new("Office", "192.168.1.100", "user").unwrap();
+        let mut o = opts();
+        o.camera = true;
+        let args = build_direct_args(&conn, &Credentials::default(), &o).unwrap();
+        if crate::rdp::supports_camera() {
+            assert!(args.contains(&"/dvc:rdpecam".to_string()));
+        } else {
+            assert!(!args.contains(&"/dvc:rdpecam".to_string()));
+        }
     }
 
     #[test]
