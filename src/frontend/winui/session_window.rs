@@ -949,6 +949,11 @@ fn pointer_moved(hwnd: HWND, session: &Rc<RefCell<Session>>, lparam: LPARAM) {
     if width <= 0 || height <= 0 {
         return;
     }
+    if session.borrow().fullscreen.is_some() {
+        if let Some(dock) = session.borrow().dock_hwnd.get() {
+            super::dock::on_parent_pointer_motion(dock, x, y, width);
+        }
+    }
     if let Ok(mut s) = session.try_borrow_mut() {
         s.controller.pointer_moved(
             f64::from(x),

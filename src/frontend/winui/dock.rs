@@ -1,15 +1,17 @@
 //! Fullscreen connection bar (dock) for Windows session windows.
 //!
-//! Provides a floating connection bar at the top of the screen when in fullscreen mode,
-//! mirroring the Linux FullscreenDock and the standard Windows Remote Desktop connection bar.
-//! Gives direct access to:
-//! - Pinned / auto-hide toggle
-//! - Session host title and connection quality
-//! - Display Scale dropdown menu
-//! - Actions / Keys dropdown menu (Ctrl+Alt+Del, Windows Key, Clipboard, View Only)
-//! - Minimize button
-//! - Restore / Exit Fullscreen button (exits fullscreen mode)
-//! - Disconnect button
+//! Provides an auto-hiding floating connection bar at the top of the screen when in fullscreen mode,
+//! mirroring the Linux FullscreenDock.
+//! - Collapsed by default upon entering fullscreen, peeking a 6px sliver with a blue horizontal accent bar at the bottom.
+//! - Slides down when the pointer reaches the top sliver / edge.
+//! - Auto-hides 600ms after the pointer moves away into the remote desktop.
+//! - Provides:
+//!   - Session host title and live connection indicator
+//!   - Display Scale dropdown menu (Scale ▾)
+//!   - Actions / Keys dropdown menu (Actions ▾)
+//!   - Restore / Exit Fullscreen button (🗗)
+//!   - Minimize button (―)
+//!   - Disconnect button (✕)
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -36,19 +38,18 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockButton {
-    Pin,
     Scale,
     Actions,
-    Minimize,
     Restore,
+    Minimize,
     Disconnect,
 }
 
 pub struct DockState {
     pub parent_hwnd: HWND,
     pub session: Rc<RefCell<Session>>,
-    pub pinned: bool,
     pub revealed: bool,
+    pub menu_open: bool,
     pub hovered: Option<DockButton>,
     pub monitor_rect: RECT,
 }
@@ -98,7 +99,7 @@ pub fn create_dock(parent_hwnd: HWND, session: Rc<RefCell<Session>>) -> HWND {
             0,
             -100,
             520,
-            38,
+            36,
             Some(parent_hwnd),
             None,
             None,
@@ -110,8 +111,8 @@ pub fn create_dock(parent_hwnd: HWND, session: Rc<RefCell<Session>>) -> HWND {
     let state = Rc::new(RefCell::new(DockState {
         parent_hwnd,
         session,
-        pinned: true,
-        revealed: true,
+        revealed: false,
+        menu_open: false,
         hovered: None,
         monitor_rect: RECT::default(),
     }));
@@ -140,6 +141,7 @@ pub fn update_dock_position(
     if !visible {
         // SAFETY: Hiding the dock window.
         unsafe {
+            let _ = KillTimer(Some(dock_hwnd), TIMER_HIDE);
             let _ = ShowWindow(dock_hwnd, SW_HIDE);
         }
         return;
@@ -147,35 +149,38 @@ pub fn update_dock_position(
 
     let scale = dock_dpi_scale(dock_hwnd);
     let width = (520.0 * scale) as i32;
-    let height = (38.0 * scale) as i32;
+    let height = (36.0 * scale) as i32;
+    let peek_h = (6.0 * scale).round().max(4.0) as i32;
 
     let mon_w = monitor_rect.right - monitor_rect.left;
     let x = monitor_rect.left + (mon_w - width) / 2;
-    let y = monitor_rect.top;
+    let collapsed_y = monitor_rect.top - height + peek_h;
 
     if let Some(state) = dock_for(dock_hwnd) {
         let mut s = state.borrow_mut();
         s.monitor_rect = *monitor_rect;
-        s.revealed = true;
+        s.revealed = false;
+        s.menu_open = false;
+        s.hovered = None;
     }
 
-    // Set rounded shape for modern floating appearance.
+    // Set rounded shape for modern floating appearance with flat top edge and curved bottom corners.
     // SAFETY: Region created and transferred to window.
     unsafe {
         let rgn = CreateRoundRectRgn(
             0,
-            0,
+            -(4.0 * scale) as i32,
             width + 1,
-            height + 8,
-            (12.0 * scale) as i32,
-            (12.0 * scale) as i32,
+            height + 1,
+            (10.0 * scale) as i32,
+            (10.0 * scale) as i32,
         );
         let _ = SetWindowRgn(dock_hwnd, Some(rgn), true);
         let _ = SetWindowPos(
             dock_hwnd,
             Some(HWND_TOPMOST),
             x,
-            y,
+            collapsed_y,
             width,
             height,
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
@@ -183,35 +188,97 @@ pub fn update_dock_position(
     }
 }
 
+/// Called from parent session window pointer motion to reveal dock or schedule auto-hide.
+pub fn on_parent_pointer_motion(dock_hwnd: HWND, x: i32, y: i32, win_w: i32) {
+    let Some(state) = dock_for(dock_hwnd) else {
+        return;
+    };
+    let scale = dock_dpi_scale(dock_hwnd);
+    let half_w = win_w / 2;
+    let trigger_zone = (win_w / 3).max((240.0 * scale) as i32);
+    let at_top_centre = y <= (8.0 * scale) as i32 && (x - half_w).abs() <= trigger_zone;
+
+    if at_top_centre {
+        let _ = unsafe { KillTimer(Some(dock_hwnd), TIMER_HIDE) };
+        set_revealed(dock_hwnd, true);
+    } else {
+        let s = state.borrow();
+        if s.revealed && !s.menu_open {
+            let mut win_r = RECT::default();
+            let _ = unsafe { GetWindowRect(dock_hwnd, &mut win_r) };
+            let height = win_r.bottom - win_r.top;
+            let slack = (24.0 * scale) as i32;
+            if y > height + slack {
+                drop(s);
+                let _ = unsafe { SetTimer(Some(dock_hwnd), TIMER_HIDE, HIDE_DELAY_MS, None) };
+            }
+        }
+    }
+}
+
+fn set_revealed(dock_hwnd: HWND, reveal: bool) {
+    let Some(state) = dock_for(dock_hwnd) else {
+        return;
+    };
+    let mut s = state.borrow_mut();
+    if s.revealed == reveal {
+        return;
+    }
+    s.revealed = reveal;
+    if !reveal {
+        s.hovered = None;
+    }
+
+    let scale = dock_dpi_scale(dock_hwnd);
+    let mut win_r = RECT::default();
+    let _ = unsafe { GetWindowRect(dock_hwnd, &mut win_r) };
+    let width = win_r.right - win_r.left;
+    let height = win_r.bottom - win_r.top;
+    let peek_h = (6.0 * scale).round().max(4.0) as i32;
+
+    let target_y = if reveal {
+        s.monitor_rect.top
+    } else {
+        s.monitor_rect.top - height + peek_h
+    };
+
+    unsafe {
+        let _ = SetWindowPos(
+            dock_hwnd,
+            Some(HWND_TOPMOST),
+            win_r.left,
+            target_y,
+            width,
+            height,
+            SWP_NOACTIVATE,
+        );
+        let _ = InvalidateRect(Some(dock_hwnd), None, false);
+    }
+}
+
 fn button_rect(btn: DockButton, width: i32, height: i32, scale: f64) -> RECT {
     let top = (4.0 * scale) as i32;
-    let bottom = height - (4.0 * scale) as i32;
+    let bottom = height - (7.0 * scale) as i32;
     match btn {
-        DockButton::Pin => RECT {
-            left: (8.0 * scale) as i32,
-            top,
-            right: (38.0 * scale) as i32,
-            bottom,
-        },
         DockButton::Scale => RECT {
-            left: width - (320.0 * scale) as i32,
+            left: width - (326.0 * scale) as i32,
             top,
-            right: width - (232.0 * scale) as i32,
+            right: width - (238.0 * scale) as i32,
             bottom,
         },
         DockButton::Actions => RECT {
-            left: width - (228.0 * scale) as i32,
+            left: width - (234.0 * scale) as i32,
             top,
-            right: width - (132.0 * scale) as i32,
+            right: width - (138.0 * scale) as i32,
             bottom,
         },
-        DockButton::Minimize => RECT {
-            left: width - (124.0 * scale) as i32,
+        DockButton::Restore => RECT {
+            left: width - (126.0 * scale) as i32,
             top,
             right: width - (90.0 * scale) as i32,
             bottom,
         },
-        DockButton::Restore => RECT {
+        DockButton::Minimize => RECT {
             left: width - (86.0 * scale) as i32,
             top,
             right: width - (50.0 * scale) as i32,
@@ -226,12 +293,11 @@ fn button_rect(btn: DockButton, width: i32, height: i32, scale: f64) -> RECT {
     }
 }
 
-const ALL_BUTTONS: [DockButton; 6] = [
-    DockButton::Pin,
+const ALL_BUTTONS: [DockButton; 5] = [
     DockButton::Scale,
     DockButton::Actions,
-    DockButton::Minimize,
     DockButton::Restore,
+    DockButton::Minimize,
     DockButton::Disconnect,
 ];
 
@@ -267,27 +333,12 @@ unsafe extern "system" fn dock_wndproc(
             let height = client.bottom - client.top;
             let scale = dock_dpi_scale(hwnd);
 
+            // Cancel pending hide and reveal dock if collapsed.
+            let _ = unsafe { KillTimer(Some(hwnd), TIMER_HIDE) };
+            set_revealed(hwnd, true);
+
             if let Some(state) = dock_for(hwnd) {
                 let mut s = state.borrow_mut();
-                if !s.revealed {
-                    // Reveal dock when mouse touches the peeking strip.
-                    s.revealed = true;
-                    let mon_y = s.monitor_rect.top;
-                    let mut win_r = RECT::default();
-                    let _ = unsafe { GetWindowRect(hwnd, &mut win_r) };
-                    let _ = unsafe {
-                        SetWindowPos(
-                            hwnd,
-                            Some(HWND_TOPMOST),
-                            win_r.left,
-                            mon_y,
-                            width,
-                            height,
-                            SWP_NOACTIVATE | SWP_NOSIZE,
-                        )
-                    };
-                }
-
                 let new_hovered = hit_test(x, y, width, height, scale);
                 if new_hovered != s.hovered {
                     s.hovered = new_hovered;
@@ -312,7 +363,7 @@ unsafe extern "system" fn dock_wndproc(
                 let mut s = state.borrow_mut();
                 s.hovered = None;
                 let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
-                if !s.pinned {
+                if !s.menu_open {
                     // SAFETY: Start auto-hide timer.
                     let _ = unsafe { SetTimer(Some(hwnd), TIMER_HIDE, HIDE_DELAY_MS, None) };
                 }
@@ -324,26 +375,27 @@ unsafe extern "system" fn dock_wndproc(
                 // SAFETY: Stop hide timer.
                 let _ = unsafe { KillTimer(Some(hwnd), TIMER_HIDE) };
                 if let Some(state) = dock_for(hwnd) {
-                    let mut s = state.borrow_mut();
-                    if !s.pinned {
-                        s.revealed = false;
-                        let mut client = RECT::default();
-                        let _ = unsafe { GetClientRect(hwnd, &mut client) };
-                        let height = client.bottom - client.top;
+                    let menu_open = state.borrow().menu_open;
+                    if !menu_open {
+                        // Check cursor position before hiding:
+                        let mut pt = POINT::default();
+                        let _ = unsafe { GetCursorPos(&mut pt) };
                         let mut win_r = RECT::default();
                         let _ = unsafe { GetWindowRect(hwnd, &mut win_r) };
-                        let hidden_y = s.monitor_rect.top - height + 4;
-                        let _ = unsafe {
-                            SetWindowPos(
-                                hwnd,
-                                Some(HWND_TOPMOST),
-                                win_r.left,
-                                hidden_y,
-                                win_r.right - win_r.left,
-                                height,
-                                SWP_NOACTIVATE,
-                            )
-                        };
+                        let scale = dock_dpi_scale(hwnd);
+                        let slack = (24.0 * scale) as i32;
+                        let mon_y = state.borrow().monitor_rect.top;
+                        let over_dock = pt.x >= win_r.left - slack
+                            && pt.x <= win_r.right + slack
+                            && pt.y >= mon_y
+                            && pt.y <= win_r.bottom + slack;
+                        if over_dock {
+                            // Still near dock; reschedule hide.
+                            let _ =
+                                unsafe { SetTimer(Some(hwnd), TIMER_HIDE, HIDE_DELAY_MS, None) };
+                        } else {
+                            set_revealed(hwnd, false);
+                        }
                     }
                 }
             }
@@ -381,36 +433,17 @@ unsafe extern "system" fn dock_wndproc(
 
 fn handle_button_click(hwnd: HWND, btn: DockButton, scale: f64) {
     let Some(state) = dock_for(hwnd) else { return };
-    let (parent_hwnd, session, mut pinned) = {
+    let (parent_hwnd, session) = {
         let s = state.borrow();
-        (s.parent_hwnd, Rc::clone(&s.session), s.pinned)
+        (s.parent_hwnd, Rc::clone(&s.session))
     };
 
     match btn {
-        DockButton::Pin => {
-            pinned = !pinned;
-            state.borrow_mut().pinned = pinned;
-            if pinned {
-                // Make sure dock is fully shown.
-                state.borrow_mut().revealed = true;
-                let mut client = RECT::default();
-                let _ = unsafe { GetClientRect(hwnd, &mut client) };
-                let mut win_r = RECT::default();
-                let _ = unsafe { GetWindowRect(hwnd, &mut win_r) };
-                let mon_y = state.borrow().monitor_rect.top;
-                let _ = unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        Some(HWND_TOPMOST),
-                        win_r.left,
-                        mon_y,
-                        win_r.right - win_r.left,
-                        client.bottom - client.top,
-                        SWP_NOACTIVATE,
-                    )
-                };
-            }
-            let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+        DockButton::Scale => {
+            show_scale_menu(hwnd, parent_hwnd, &session, scale);
+        }
+        DockButton::Actions => {
+            show_actions_menu(hwnd, parent_hwnd, &session, scale);
         }
         DockButton::Restore => {
             // Exit fullscreen!
@@ -425,16 +458,13 @@ fn handle_button_click(hwnd: HWND, btn: DockButton, scale: f64) {
             // End session!
             session.borrow_mut().controller.end();
         }
-        DockButton::Scale => {
-            show_scale_menu(hwnd, parent_hwnd, &session, scale);
-        }
-        DockButton::Actions => {
-            show_actions_menu(hwnd, parent_hwnd, &session, scale);
-        }
     }
 }
 
 fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Session>>, scale: f64) {
+    if let Some(state) = dock_for(dock_hwnd) {
+        state.borrow_mut().menu_open = true;
+    }
     let mut client = RECT::default();
     let _ = unsafe { GetClientRect(dock_hwnd, &mut client) };
     let r = button_rect(
@@ -454,7 +484,12 @@ fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Sess
     unsafe {
         let menu = match CreatePopupMenu() {
             Ok(m) => m,
-            Err(_) => return,
+            Err(_) => {
+                if let Some(state) = dock_for(dock_hwnd) {
+                    state.borrow_mut().menu_open = false;
+                }
+                return;
+            }
         };
         let current_scale = session.borrow().controller.scale();
         let entries = scale_menu(current_scale);
@@ -487,6 +522,11 @@ fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Sess
         );
         let _ = DestroyMenu(menu);
 
+        if let Some(state) = dock_for(dock_hwnd) {
+            state.borrow_mut().menu_open = false;
+            let _ = SetTimer(Some(dock_hwnd), TIMER_HIDE, HIDE_DELAY_MS, None);
+        }
+
         let chosen = chosen.0 as usize;
         if (1000..custom_id).contains(&chosen) {
             let index = chosen - 1000;
@@ -511,6 +551,9 @@ fn show_actions_menu(
     session: &Rc<RefCell<Session>>,
     scale: f64,
 ) {
+    if let Some(state) = dock_for(dock_hwnd) {
+        state.borrow_mut().menu_open = true;
+    }
     let mut client = RECT::default();
     let _ = unsafe { GetClientRect(dock_hwnd, &mut client) };
     let r = button_rect(
@@ -529,7 +572,12 @@ fn show_actions_menu(
     unsafe {
         let menu = match CreatePopupMenu() {
             Ok(m) => m,
-            Err(_) => return,
+            Err(_) => {
+                if let Some(state) = dock_for(dock_hwnd) {
+                    state.borrow_mut().menu_open = false;
+                }
+                return;
+            }
         };
 
         // Keys submenu
@@ -567,6 +615,11 @@ fn show_actions_menu(
         );
         let _ = DestroyMenu(menu);
 
+        if let Some(state) = dock_for(dock_hwnd) {
+            state.borrow_mut().menu_open = false;
+            let _ = SetTimer(Some(dock_hwnd), TIMER_HIDE, HIDE_DELAY_MS, None);
+        }
+
         let chosen = chosen.0 as usize;
         if (2000..2000 + KeyCombo::ALL.len()).contains(&chosen) {
             let combo = KeyCombo::ALL[chosen - 2000];
@@ -596,10 +649,10 @@ fn paint_dock(hwnd: HWND) {
         let _ = unsafe { EndPaint(hwnd, &ps) };
         return;
     };
-    let (name, pinned, hovered) = {
+    let (name, hovered) = {
         let s = state.borrow();
         let name = s.session.borrow().name.clone();
-        (name, s.pinned, s.hovered)
+        (name, s.hovered)
     };
 
     // Double-buffered drawing for zero flicker.
@@ -613,13 +666,14 @@ fn paint_dock(hwnd: HWND) {
         let _ = FillRect(mem_dc, &client, bg_brush);
         let _ = DeleteObject(bg_brush.into());
 
-        // Top accent line when unpinned and collapsed:
-        let accent_brush = CreateSolidBrush(COLORREF(0xD47800)); // Win Blue BGR
+        // Bottom accent line matching Linux: border-bottom: 3px solid @accent_bg_color;
+        let accent_h = (3.0 * scale).round().max(2.0) as i32;
+        let accent_brush = CreateSolidBrush(COLORREF(0xD47800)); // Win Blue BGR (RGB: 0x00, 0x78, 0xD4)
         let accent_rect = RECT {
             left: 0,
-            top: 0,
+            top: height - accent_h,
             right: width,
-            bottom: (3.0 * scale) as i32,
+            bottom: height,
         };
         let _ = FillRect(mem_dc, &accent_rect, accent_brush);
         let _ = DeleteObject(accent_brush.into());
@@ -664,17 +718,6 @@ fn paint_dock(hwnd: HWND) {
             let _ = SetTextColor(mem_dc, COLORREF(0xFFFFFF));
             let mut draw_r = r;
             match btn {
-                DockButton::Pin => {
-                    let pin_text = if pinned { "📌" } else { "📍" };
-                    let mut text_w: Vec<u16> =
-                        pin_text.encode_utf16().chain(std::iter::once(0)).collect();
-                    let _ = DrawTextW(
-                        mem_dc,
-                        &mut text_w,
-                        &mut draw_r,
-                        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-                    );
-                }
                 DockButton::Scale => {
                     let mut text_w: Vec<u16> =
                         "Scale ▾".encode_utf16().chain(std::iter::once(0)).collect();
@@ -697,9 +740,9 @@ fn paint_dock(hwnd: HWND) {
                         DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
                     );
                 }
-                DockButton::Minimize => {
+                DockButton::Restore => {
                     let mut text_w: Vec<u16> =
-                        "―".encode_utf16().chain(std::iter::once(0)).collect();
+                        "🗗".encode_utf16().chain(std::iter::once(0)).collect();
                     let _ = DrawTextW(
                         mem_dc,
                         &mut text_w,
@@ -707,9 +750,9 @@ fn paint_dock(hwnd: HWND) {
                         DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
                     );
                 }
-                DockButton::Restore => {
+                DockButton::Minimize => {
                     let mut text_w: Vec<u16> =
-                        "🗗".encode_utf16().chain(std::iter::once(0)).collect();
+                        "―".encode_utf16().chain(std::iter::once(0)).collect();
                     let _ = DrawTextW(
                         mem_dc,
                         &mut text_w,
@@ -732,10 +775,10 @@ fn paint_dock(hwnd: HWND) {
 
         // Title and green status dot.
         let title_r = RECT {
-            left: (42.0 * scale) as i32,
+            left: (16.0 * scale) as i32,
             top: (4.0 * scale) as i32,
-            right: width - (326.0 * scale) as i32,
-            bottom: height - (4.0 * scale) as i32,
+            right: width - (338.0 * scale) as i32,
+            bottom: height - (7.0 * scale) as i32,
         };
         let title_str = format!("● {name}");
         let mut title_w: Vec<u16> = title_str.encode_utf16().chain(std::iter::once(0)).collect();
@@ -750,17 +793,19 @@ fn paint_dock(hwnd: HWND) {
 
         // Separators.
         let sep_brush = CreateSolidBrush(COLORREF(0x404040));
+        let sep_top = (7.0 * scale) as i32;
+        let sep_bottom = height - (10.0 * scale) as i32;
         let sep1 = RECT {
-            left: width - (324.0 * scale) as i32,
-            top: (8.0 * scale) as i32,
-            right: width - (323.0 * scale) as i32,
-            bottom: height - (8.0 * scale) as i32,
+            left: width - (332.0 * scale) as i32,
+            top: sep_top,
+            right: width - (331.0 * scale) as i32,
+            bottom: sep_bottom,
         };
         let sep2 = RECT {
-            left: width - (128.0 * scale) as i32,
-            top: (8.0 * scale) as i32,
-            right: width - (127.0 * scale) as i32,
-            bottom: height - (8.0 * scale) as i32,
+            left: width - (132.0 * scale) as i32,
+            top: sep_top,
+            right: width - (131.0 * scale) as i32,
+            bottom: sep_bottom,
         };
         let _ = FillRect(mem_dc, &sep1, sep_brush);
         let _ = FillRect(mem_dc, &sep2, sep_brush);
