@@ -245,6 +245,7 @@ impl SessionView {
         // SAFETY: NSView's designated initializer takes the frame rectangle.
         let view: Retained<Self> =
             unsafe { msg_send![super(view), initWithFrame: util::rect(0.0, 0.0, 1280.0, 800.0)] };
+        view.setWantsLayer(true);
         view.setAutoresizingMask(
             NSAutoresizingMaskOptions::ViewWidthSizable
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
@@ -343,7 +344,7 @@ impl SessionView {
         CGContext::save_g_state(ctx);
         CGContext::translate_ctm(ctx, bounds.origin.x, bounds.origin.y + bounds.size.height);
         CGContext::scale_ctm(ctx, 1.0, -1.0);
-        CGContext::set_interpolation_quality(ctx, CGInterpolationQuality::Medium);
+        CGContext::set_interpolation_quality(ctx, CGInterpolationQuality::Low);
         CGContext::draw_image(ctx, CGRect::new(CGPoint::ZERO, bounds.size), Some(image));
         CGContext::restore_g_state(ctx);
     }

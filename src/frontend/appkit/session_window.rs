@@ -113,6 +113,8 @@ pub(super) fn open(
         resize_generation: Cell::new(0),
         notice_generation: Cell::new(0),
         has_frame: Cell::new(false),
+        frame_dirty: Cell::new(false),
+        render_scheduled: Cell::new(false),
         notified: Cell::new(false),
     });
     window.setContentView(Some(&session.view));
@@ -213,6 +215,8 @@ pub(super) struct Session {
     resize_generation: Cell<u64>,
     notice_generation: Cell<u64>,
     has_frame: Cell<bool>,
+    frame_dirty: Cell<bool>,
+    render_scheduled: Cell<bool>,
     /// The main window has been told that the session ended.
     notified: Cell<bool>,
 }
@@ -600,20 +604,44 @@ impl Session {
         }
     }
 
+    /// Synchronizes remote frame presentation with display refresh (triple-buffered),
+    /// coalescing intermediate slice/tile updates so only complete frames are presented.
+    fn schedule_frame_render(self: &Rc<Self>) {
+        if self.render_scheduled.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        util::run_later(Duration::from_millis(8), move || {
+            let Some(this) = weak.upgrade() else { return };
+            this.render_scheduled.set(false);
+            if this.frame_dirty.replace(false) {
+                let view = &this.view;
+                this.with_controller(|c| {
+                    if let Some(bridge) = c.bridge() {
+                        bridge.with_frame(|frame| view.show_frame(frame));
+                    }
+                });
+            }
+        });
+    }
+
     // ----- Engine events -----
 
     fn handle_event(self: &Rc<Self>, event: BridgeEvent) {
         match event {
             BridgeEvent::FrameUpdated => {
-                let view = &self.view;
-                self.with_controller(|c| {
-                    if let Some(bridge) = c.bridge() {
-                        bridge.with_frame(|frame| view.show_frame(frame));
-                    }
-                });
+                self.frame_dirty.set(true);
                 if !self.has_frame.replace(true) {
+                    let view = &self.view;
+                    self.with_controller(|c| {
+                        if let Some(bridge) = c.bridge() {
+                            bridge.with_frame(|frame| view.show_frame(frame));
+                        }
+                    });
                     self.view.set_overlay(Overlay::None, || {});
                     self.view.take_focus();
+                } else {
+                    self.schedule_frame_render();
                 }
             }
             BridgeEvent::Status(status) => self.handle_status(status),

@@ -17,13 +17,14 @@ use std::time::Duration;
 use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateFontW, CreateSolidBrush, DeleteObject, DrawTextW, EndPaint,
-    EnumDisplayMonitors, FillRect, GetMonitorInfoW, InvalidateRect, MonitorFromWindow,
-    SelectObject, SetBkMode, SetBrushOrgEx, SetStretchBltMode, SetTextColor, StretchDIBits,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLORONCOLOR,
-    DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CALCRECT, DT_CENTER, DT_NOPREFIX, DT_WORDBREAK, FW_NORMAL,
-    FW_SEMIBOLD, HALFTONE, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
-    MONITOR_DEFAULTTOPRIMARY, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
+    DeleteDC, DeleteObject, DrawTextW, EndPaint, EnumDisplayMonitors, FillRect, GetMonitorInfoW,
+    InvalidateRect, MonitorFromWindow, SelectObject, SetBkMode, SetBrushOrgEx, SetStretchBltMode,
+    SetTextColor, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY,
+    CLIP_DEFAULT_PRECIS, COLORONCOLOR, DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CALCRECT, DT_CENTER,
+    DT_NOPREFIX, DT_WORDBREAK, FW_NORMAL, FW_SEMIBOLD, HALFTONE, HDC, HMONITOR, MONITORINFO,
+    MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -700,11 +701,28 @@ fn paint(hwnd: HWND, session: &Rc<RefCell<Session>>) {
     // SAFETY: BeginPaint/EndPaint pair on our window during WM_PAINT.
     let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
     let (width, height) = client_size(hwnd);
+    if width <= 0 || height <= 0 {
+        // SAFETY: matches BeginPaint above.
+        let _ = unsafe { EndPaint(hwnd, &ps) };
+        return;
+    }
+
+    // Double buffering: compose off-screen in memory DC, then BitBlt atomically to screen HDC.
+    let mem_dc = unsafe { CreateCompatibleDC(Some(hdc)) };
+    let mem_bm = unsafe { CreateCompatibleBitmap(hdc, width, height) };
+    let use_backbuffer = !mem_dc.is_invalid() && !mem_bm.is_invalid();
+    let target_dc = if use_backbuffer { mem_dc } else { hdc };
+    let old_bm = if use_backbuffer {
+        unsafe { Some(SelectObject(mem_dc, mem_bm.into())) }
+    } else {
+        None
+    };
+
     let drawn = {
         let s = session.borrow();
         match s.controller.bridge() {
             Some(bridge) if s.controller.has_frame() => {
-                bridge.with_frame(|frame| paint_frame(hdc, width, height, frame))
+                bridge.with_frame(|frame| paint_frame(target_dc, width, height, frame))
             }
             _ => false,
         }
@@ -726,8 +744,18 @@ fn paint(hwnd: HWND, session: &Rc<RefCell<Session>>) {
             ),
             state => (s.name.clone(), state.subtitle().to_string()),
         };
-        paint_placeholder(hwnd, hdc, width, height, &heading, &detail);
+        paint_placeholder(hwnd, target_dc, width, height, &heading, &detail);
     }
+
+    if use_backbuffer {
+        let _ = unsafe { BitBlt(hdc, 0, 0, width, height, Some(mem_dc), 0, 0, SRCCOPY) };
+        if let Some(old_bm) = old_bm {
+            let _ = unsafe { SelectObject(mem_dc, old_bm) };
+        }
+        let _ = unsafe { DeleteObject(mem_bm.into()) };
+        let _ = unsafe { DeleteDC(mem_dc) };
+    }
+
     // SAFETY: matches BeginPaint above.
     let _ = unsafe { EndPaint(hwnd, &ps) };
 }
@@ -753,16 +781,10 @@ fn paint_frame(hdc: HDC, width: i32, height: i32, frame: &crate::rdp::Frame) -> 
         },
         ..Default::default()
     };
-    let stretched = width != frame.width as i32 || height != frame.height as i32;
     // SAFETY: the pixel buffer holds `height` rows of `stride` bytes as described by
     // `info`; the device context is valid during WM_PAINT.
     unsafe {
-        if stretched {
-            SetStretchBltMode(hdc, HALFTONE);
-            let _ = SetBrushOrgEx(hdc, 0, 0, None);
-        } else {
-            SetStretchBltMode(hdc, COLORONCOLOR);
-        }
+        SetStretchBltMode(hdc, COLORONCOLOR);
         StretchDIBits(
             hdc,
             0,
