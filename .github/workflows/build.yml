@@ -23,6 +23,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
             libwebkitgtk-6.0-dev libsoup-3.0-dev freerdp3-dev libwinpr3-dev libfuse3-dev rpm zstd
+          # Provide libfuse3.so.4 compatibility symlink if only libfuse3.so.3 is available
+          if [ -f /usr/lib/x86_64-linux-gnu/libfuse3.so.3 ] && [ ! -f /usr/lib/x86_64-linux-gnu/libfuse3.so.4 ]; then
+            sudo ln -sf libfuse3.so.3 /usr/lib/x86_64-linux-gnu/libfuse3.so.4
+            sudo /sbin/ldconfig || true
+          fi
       - name: Fetch FreeRDP 3.32+ Bundle
         run: ./scripts/fetch-freerdp.sh
       - uses: dtolnay/rust-toolchain@stable
@@ -104,7 +109,11 @@ jobs:
       - name: Install .deb package
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb dbus-x11 libfuse3-4 ./target/packages/*.deb
+          sudo apt-get install -y xvfb dbus-x11 libfuse3-3 ./target/packages/*.deb || sudo apt-get install -y xvfb dbus-x11 ./target/packages/*.deb
+          if [ -f /usr/lib/x86_64-linux-gnu/libfuse3.so.3 ] && [ ! -f /usr/lib/x86_64-linux-gnu/libfuse3.so.4 ]; then
+            sudo ln -sf libfuse3.so.3 /usr/lib/x86_64-linux-gnu/libfuse3.so.4
+            sudo /sbin/ldconfig || true
+          fi
       - name: Launch headlessly under Xvfb
         run: |
           xvfb-run -a dbus-launch windows-app &

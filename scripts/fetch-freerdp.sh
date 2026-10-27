@@ -31,10 +31,11 @@ if command -v apt-get &>/dev/null; then
         libwinpr3-dev=3.32.1+dfsg-1~bpo13+1 \
         libwinpr-tools3-3=3.32.1+dfsg-1~bpo13+1 \
         libsndio7.0 \
-        libsso-mib0=0.10.2-1~bpo13+1 2>/dev/null; then
+        libsso-mib0=0.10.2-1~bpo13+1 \
+        libfuse3-4=3.17.2-3 2>/dev/null; then
         DOWNLOAD_SUCCESS=1
     elif apt-get download -t trixie-backports \
-        freerdp3-dev libfreerdp-client3-3 libfreerdp3-3 libwinpr3-3 libwinpr3-dev libwinpr-tools3-3 libsndio7.0 libsso-mib0 2>/dev/null; then
+        freerdp3-dev libfreerdp-client3-3 libfreerdp3-3 libwinpr3-3 libwinpr3-dev libwinpr-tools3-3 libsndio7.0 libsso-mib0 libfuse3-4 2>/dev/null; then
         DOWNLOAD_SUCCESS=1
     fi
 fi
@@ -52,6 +53,7 @@ if [ "${DOWNLOAD_SUCCESS}" -eq 0 ]; then
         "${DEB_BASE}/f/freerdp3/libwinpr-tools3-3_3.32.1+dfsg-1~bpo13+1_amd64.deb"
         "${DEB_BASE}/s/sndio/libsndio7.0_1.10.0-0.1_amd64.deb"
         "${DEB_BASE}/s/sso-mib/libsso-mib0_0.10.2-1~bpo13+1_amd64.deb"
+        "${DEB_BASE}/f/fuse3/libfuse3-4_3.17.2-3_amd64.deb"
     )
 
     for url in "${URLS[@]}"; do
@@ -93,6 +95,10 @@ done
 
 if [ -d "${TEMP_DL}/extracted/usr" ]; then
     cp -r "${TEMP_DL}/extracted/usr/"* "${TARGET_DIR}/"
+    # Merged-usr fallback in case libraries were placed in /lib
+    if [ -d "${TEMP_DL}/extracted/lib" ]; then
+        cp -r "${TEMP_DL}/extracted/lib/"* "${TARGET_DIR}/lib/" 2>/dev/null || true
+    fi
     echo "FreeRDP 3.32+ bundle successfully installed into ${TARGET_DIR}"
     echo "Build script (build.rs) will automatically detect and link this bundle."
 else
