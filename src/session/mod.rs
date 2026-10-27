@@ -509,6 +509,10 @@ fn build_args(target: &Target<'_>, opts: &SessionOptions) -> Vec<String> {
     }
     if opts.quality == Quality::Modem {
         args.push("/bpp:16".to_string());
+    } else {
+        args.push("+fonts".to_string());
+        args.push("+aero".to_string());
+        args.push("+window-drag".to_string());
     }
     for drive in &opts.drives {
         args.push(format!(
@@ -876,6 +880,9 @@ mod tests {
             "/scale-device:140",
             "+clipboard",
             "+auto-reconnect",
+            "+fonts",
+            "+aero",
+            "+window-drag",
             "/drive:Shared,/home/u/Shared Docs",
             "/u:a@b.com",
             "/gfx:AVC444",

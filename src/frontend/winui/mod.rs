@@ -8,6 +8,7 @@
 
 mod app;
 mod dialogs;
+mod dock;
 mod forms;
 mod session_window;
 mod settings;

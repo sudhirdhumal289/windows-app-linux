@@ -105,26 +105,27 @@ pub enum Notice {
 
 pub type Notifier = Rc<dyn Fn(Notice)>;
 
-struct Fullscreen {
+pub(crate) struct Fullscreen {
     style: isize,
     placement: WINDOWPLACEMENT,
     /// Monitors of a multi-monitor layout, relative to the window's own monitor.
     span: Option<Vec<MonitorRect>>,
 }
 
-struct Session {
-    id: u64,
-    name: String,
-    controller: SessionController,
-    notify: Notifier,
-    fullscreen: Option<Fullscreen>,
+pub(crate) struct Session {
+    pub(crate) id: u64,
+    pub(crate) name: String,
+    pub(crate) controller: SessionController,
+    pub(crate) notify: Notifier,
+    pub(crate) fullscreen: Option<Fullscreen>,
+    pub(crate) dock_hwnd: std::cell::Cell<Option<HWND>>,
     /// Item count of the unmodified system menu; ours follow.
-    base_menu_items: i32,
-    scale_choices: Vec<ScaleChoice>,
-    network: Option<String>,
-    clipboard_sequence: u32,
-    note: Option<String>,
-    target: Option<crate::launcher::LaunchTarget>,
+    pub(crate) base_menu_items: i32,
+    pub(crate) scale_choices: Vec<ScaleChoice>,
+    pub(crate) network: Option<String>,
+    pub(crate) clipboard_sequence: u32,
+    pub(crate) note: Option<String>,
+    pub(crate) target: Option<crate::launcher::LaunchTarget>,
 }
 
 thread_local! {
@@ -279,6 +280,7 @@ pub fn open(launch: Launch, prepared: PreparedSession, notify: Notifier) -> Resu
         controller,
         notify,
         fullscreen: None,
+        dock_hwnd: std::cell::Cell::new(None),
         base_menu_items,
         scale_choices: Vec::new(),
         network: None,
@@ -286,6 +288,8 @@ pub fn open(launch: Launch, prepared: PreparedSession, notify: Notifier) -> Resu
         note: None,
         target,
     }));
+    let dock = super::dock::create_dock(hwnd, Rc::clone(&session));
+    session.borrow().dock_hwnd.set(Some(dock));
     SESSIONS.with_borrow_mut(|sessions| sessions.insert(key, Rc::clone(&session)));
 
     win32::apply_window_chrome(hwnd);
@@ -535,7 +539,7 @@ fn client_size(hwnd: HWND) -> (i32, i32) {
     win32::rect_size(&rect)
 }
 
-fn dpi_scale(hwnd: HWND) -> f64 {
+pub(crate) fn dpi_scale(hwnd: HWND) -> f64 {
     // SAFETY: plain query on our window.
     let dpi = unsafe { GetDpiForWindow(hwnd) };
     if dpi == 0 {
@@ -749,11 +753,11 @@ fn paint_frame(hdc: HDC, width: i32, height: i32, frame: &crate::rdp::Frame) -> 
         },
         ..Default::default()
     };
-    let downscale = width < frame.width as i32 || height < frame.height as i32;
+    let stretched = width != frame.width as i32 || height != frame.height as i32;
     // SAFETY: the pixel buffer holds `height` rows of `stride` bytes as described by
     // `info`; the device context is valid during WM_PAINT.
     unsafe {
-        if downscale {
+        if stretched {
             SetStretchBltMode(hdc, HALFTONE);
             let _ = SetBrushOrgEx(hdc, 0, 0, None);
         } else {
@@ -1054,7 +1058,7 @@ fn window_monitor(hwnd: HWND) -> Option<Monitor> {
     monitor_info(unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY) })
 }
 
-fn resize_now(hwnd: HWND, session: &Rc<RefCell<Session>>) {
+pub(crate) fn resize_now(hwnd: HWND, session: &Rc<RefCell<Session>>) {
     let scale = dpi_scale(hwnd);
     let s = session.borrow();
     if let Some(span) = s.fullscreen.as_ref().and_then(|f| f.span.as_ref()) {
@@ -1067,7 +1071,7 @@ fn resize_now(hwnd: HWND, session: &Rc<RefCell<Session>>) {
     }
 }
 
-fn set_fullscreen(hwnd: HWND, session: &Rc<RefCell<Session>>, on: bool) {
+pub(crate) fn set_fullscreen(hwnd: HWND, session: &Rc<RefCell<Session>>, on: bool) {
     if on == session.borrow().fullscreen.is_some() {
         return;
     }
@@ -1113,6 +1117,9 @@ fn set_fullscreen(hwnd: HWND, session: &Rc<RefCell<Session>>, on: bool) {
             );
         }
         save_placement(session, &monitor.device);
+        if let Some(dock) = session.borrow().dock_hwnd.get() {
+            super::dock::update_dock_position(dock, hwnd, &rect, true);
+        }
     } else {
         let Some(saved) = session.borrow_mut().fullscreen.take() else {
             return;
@@ -1130,6 +1137,9 @@ fn set_fullscreen(hwnd: HWND, session: &Rc<RefCell<Session>>, on: bool) {
                 0,
                 SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER,
             );
+        }
+        if let Some(dock) = session.borrow().dock_hwnd.get() {
+            super::dock::update_dock_position(dock, hwnd, &RECT::default(), false);
         }
     }
     update_title(hwnd, session);
@@ -1208,7 +1218,7 @@ fn append(
 }
 
 /// Replaces our part of the system menu with the current state.
-fn rebuild_menu(hwnd: HWND, session: &Rc<RefCell<Session>>) {
+pub(crate) fn rebuild_menu(hwnd: HWND, session: &Rc<RefCell<Session>>) {
     // SAFETY: edits the system menu of our own window; removed submenus are destroyed by
     // DeleteMenu and new ones are owned by the menu they are appended to.
     unsafe {
@@ -1319,7 +1329,7 @@ fn show_menu(hwnd: HWND, session: &Rc<RefCell<Session>>) {
 }
 
 /// Runs a session menu command; `false` for commands that are not ours.
-fn run_command(hwnd: HWND, session: &Rc<RefCell<Session>>, command: usize) -> bool {
+pub(crate) fn run_command(hwnd: HWND, session: &Rc<RefCell<Session>>, command: usize) -> bool {
     match command {
         c if (CMD_SEND_KEYS..CMD_SEND_KEYS + KeyCombo::ALL.len() * CMD_STEP).contains(&c) => {
             let combo = KeyCombo::ALL[(c - CMD_SEND_KEYS) / CMD_STEP];
@@ -1372,7 +1382,7 @@ fn run_command(hwnd: HWND, session: &Rc<RefCell<Session>>, command: usize) -> bo
     true
 }
 
-fn type_clipboard(hwnd: HWND, session: &Rc<RefCell<Session>>) {
+pub(crate) fn type_clipboard(hwnd: HWND, session: &Rc<RefCell<Session>>) {
     let Some(text) = win32::clipboard_text(hwnd).filter(|t| !t.is_empty()) else {
         win32::message(
             Some(hwnd),
@@ -1388,7 +1398,7 @@ fn type_clipboard(hwnd: HWND, session: &Rc<RefCell<Session>>) {
     }
 }
 
-fn screenshot(hwnd: HWND, session: &Rc<RefCell<Session>>) {
+pub(crate) fn screenshot(hwnd: HWND, session: &Rc<RefCell<Session>>) {
     let (path, result) = {
         let s = session.borrow();
         let path = screenshot_path(&s.name).with_extension("bmp");
@@ -1445,6 +1455,9 @@ fn close(hwnd: HWND, session: &Rc<RefCell<Session>>) {
 }
 
 fn destroyed(hwnd: HWND, session: &Rc<RefCell<Session>>) {
+    if let Some(dock) = session.borrow().dock_hwnd.get() {
+        let _ = unsafe { DestroyWindow(dock) };
+    }
     SESSIONS.with_borrow_mut(|sessions| sessions.remove(&hwnd_key(hwnd)));
     // SAFETY: stops the timers of the window being destroyed.
     unsafe {
