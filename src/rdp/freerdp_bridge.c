@@ -171,6 +171,9 @@ typedef struct {
     UINT64 network_polled_at;
     UINT32 network_last[3];
 
+    /* Whether a surface frame is actively being decoded between BEGIN and END markers. */
+    BOOL in_surface_frame;
+
     /* Why the last connection attempt was refused (static string); session thread only. */
     const char* failure_hint;
 } BridgeClientContext;
@@ -533,14 +536,36 @@ static BOOL bridge_begin_paint(rdpContext* context) {
     return TRUE;
 }
 
+static BOOL bridge_surface_frame_marker(rdpContext* context,
+                                        const SURFACE_FRAME_MARKER* marker) {
+    if (!context || !marker) return TRUE;
+    BridgeClientContext* bctx = (BridgeClientContext*)context;
+    if (marker->frameAction == SURFACECMD_FRAMEACTION_BEGIN) {
+        bctx->in_surface_frame = TRUE;
+    } else if (marker->frameAction == SURFACECMD_FRAMEACTION_END) {
+        bctx->in_surface_frame = FALSE;
+        rdpGdi* gdi = context->gdi;
+        if (gdi && gdi->primary_buffer && !gdi->suppressOutput) {
+            bridge_emit_frame(bctx, gdi, 0, 0, (INT32)gdi->width, (INT32)gdi->height);
+        }
+    }
+    return TRUE;
+}
+
 static BOOL bridge_end_paint(rdpContext* context) {
+    BridgeClientContext* bctx = (BridgeClientContext*)context;
+    if (bctx->in_surface_frame) {
+        /* Defer partial strips/tiles while inside a surface frame;
+         * the complete frame will be emitted at SURFACECMD_FRAMEACTION_END. */
+        return TRUE;
+    }
     rdpGdi* gdi = context->gdi;
     HGDI_WND hwnd = bridge_primary_hwnd(gdi);
     if (!hwnd || !hwnd->invalid || hwnd->invalid->null || gdi->suppressOutput) {
         return TRUE;
     }
     HGDI_RGN r = hwnd->invalid;
-    bridge_emit_frame((BridgeClientContext*)context, gdi, r->x, r->y, r->w, r->h);
+    bridge_emit_frame(bctx, gdi, r->x, r->y, r->w, r->h);
     return TRUE;
 }
 
@@ -580,6 +605,7 @@ static void bridge_check_layout(BridgeClientContext* bctx, UINT32 width, UINT32 
 
 static BOOL bridge_desktop_resize(rdpContext* context) {
     rdpGdi* gdi = context->gdi;
+    ((BridgeClientContext*)context)->in_surface_frame = FALSE;
     if (!gdi || !context->settings) return FALSE;
     UINT32 width = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopWidth);
     UINT32 height = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopHeight);
@@ -610,6 +636,7 @@ static BOOL bridge_post_connect(freerdp* instance) {
     context->update->BeginPaint = bridge_begin_paint;
     context->update->EndPaint = bridge_end_paint;
     context->update->DesktopResize = bridge_desktop_resize;
+    context->update->SurfaceFrameMarker = bridge_surface_frame_marker;
 
     BridgeClientContext* bctx = (BridgeClientContext*)context;
     bridge_set_input_ready(bctx, TRUE);

@@ -46,12 +46,16 @@ impl State {
         let Some(on_done) = self.on_done.borrow_mut().take() else {
             return;
         };
-        if let Some(view) = self.webview.borrow_mut().take() {
-            view.stop_loading();
-        }
-        if let Some(window) = self.window.borrow_mut().take() {
-            window.destroy();
-        }
+        let view_opt = self.webview.borrow_mut().take();
+        let window_opt = self.window.borrow_mut().take();
+        glib::idle_add_local_once(move || {
+            if let Some(view) = view_opt {
+                view.stop_loading();
+            }
+            if let Some(window) = window_opt {
+                window.close();
+            }
+        });
         if redirect_url.is_some() {
             webkit::persist_session_cookies();
         }

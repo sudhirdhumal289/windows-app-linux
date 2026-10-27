@@ -92,6 +92,7 @@ pub struct SessionWindow {
     wheel: RefCell<WheelAccumulator>,
     resize_timer: RefCell<Option<glib::SourceId>>,
     has_frame: Cell<bool>,
+    frame_dirty: Cell<bool>,
     multi_monitor: bool,
     /// Windows on the other monitors while the session spans them.
     screens: RefCell<Vec<SecondaryScreen>>,
@@ -211,6 +212,7 @@ impl SessionWindow {
             wheel: RefCell::new(WheelAccumulator::default()),
             resize_timer: RefCell::new(None),
             has_frame: Cell::new(false),
+            frame_dirty: Cell::new(false),
             multi_monitor: options.multi_monitor,
             screens: RefCell::new(Vec::new()),
             texture: RefCell::new(None),
@@ -236,6 +238,7 @@ impl SessionWindow {
         this.install_focus_handling(this.window.upcast_ref());
         this.install_clipboard_sync();
         this.install_monitor_tracking();
+        this.install_frame_renderer();
 
         this.start(session, options.login_hint);
 
@@ -377,19 +380,22 @@ impl SessionWindow {
     fn handle_event(self: &Rc<Self>, event: BridgeEvent) {
         match event {
             BridgeEvent::FrameUpdated => {
-                let texture = self
-                    .bridge()
-                    .and_then(|bridge| bridge.with_frame(RdpCanvas::texture_for));
-                if let Some(texture) = texture {
-                    self.canvas.set_texture(&texture);
-                    for screen in self.screens.borrow().iter() {
-                        screen.canvas.set_texture(&texture);
-                    }
-                    *self.texture.borrow_mut() = Some(texture);
-                }
+                self.frame_dirty.set(true);
                 if !self.has_frame.replace(true) {
+                    let texture = self
+                        .bridge()
+                        .and_then(|bridge| bridge.with_frame(RdpCanvas::texture_for));
+                    if let Some(texture) = texture {
+                        self.canvas.set_texture(&texture);
+                        for screen in self.screens.borrow().iter() {
+                            screen.canvas.set_texture(&texture);
+                        }
+                        *self.texture.borrow_mut() = Some(texture);
+                    }
                     self.loading.set_visible(false);
                     self.canvas.grab_focus();
+                } else {
+                    self.canvas.queue_draw();
                 }
             }
             BridgeEvent::Status(status) => self.handle_status(status),
@@ -880,6 +886,30 @@ impl SessionWindow {
     }
 
     /// Re-applies the layout when monitors are added, removed or rearranged.
+    /// Synchronizes remote frame presentation with the display refresh rate (VSync),
+    /// providing triple buffering so intermediate strips/tiles are never drawn progressively.
+    fn install_frame_renderer(self: &Rc<Self>) {
+        let weak = Rc::downgrade(self);
+        self.canvas.add_tick_callback(move |_, _| {
+            let Some(this) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if this.frame_dirty.replace(false) {
+                let texture = this
+                    .bridge()
+                    .and_then(|bridge| bridge.with_frame(RdpCanvas::texture_for));
+                if let Some(texture) = texture {
+                    this.canvas.set_texture(&texture);
+                    for screen in this.screens.borrow().iter() {
+                        screen.canvas.set_texture(&texture);
+                    }
+                    *this.texture.borrow_mut() = Some(texture);
+                }
+            }
+            glib::ControlFlow::Continue
+        });
+    }
+
     fn install_monitor_tracking(self: &Rc<Self>) {
         if !self.multi_monitor {
             return;

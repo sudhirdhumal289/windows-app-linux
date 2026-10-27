@@ -7,7 +7,6 @@
 
 use std::process::ExitCode;
 
-#[cfg(windows)]
 fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let payload = if let Some(s) = info.payload().downcast_ref::<&str>() {
@@ -21,11 +20,7 @@ fn install_panic_hook() {
             .location()
             .map(|l| format!(" at {}:{}", l.file(), l.line()))
             .unwrap_or_default();
-        let msg = format!(
-            "Windows App encountered a fatal error:
-
-{payload}{location}"
-        );
+        let msg = format!("Windows App encountered a fatal error:\n\n{payload}{location}");
         log::error!("{msg}");
         eprintln!("{msg}");
         if let Ok(mut dir) = std::env::current_exe() {
@@ -34,13 +29,12 @@ fn install_panic_hook() {
         }
         let temp_log = std::env::temp_dir().join("windows-app-crash.log");
         let _ = std::fs::write(temp_log, &msg);
-        #[cfg(all(feature = "winui", not(feature = "gtk")))]
+        #[cfg(all(windows, feature = "winui", not(feature = "gtk")))]
         windows_app::frontend::winui::show_fatal_error(&msg);
     }));
 }
 
 fn main() -> ExitCode {
-    #[cfg(windows)]
     install_panic_hook();
     let default_level = if cfg!(debug_assertions) {
         "debug"
