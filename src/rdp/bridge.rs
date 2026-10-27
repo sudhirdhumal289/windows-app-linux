@@ -1143,6 +1143,13 @@ impl NativeRdpBridge {
             user_data: Arc::as_ptr(&shared).cast_mut().cast(),
         };
 
+        #[cfg(target_os = "windows")]
+        if std::env::var_os("SSL_CERT_FILE").is_none() && std::env::var_os("SSL_CERT_DIR").is_none() {
+            if let Some(ca_file) = crate::platform::ensure_ca_bundle() {
+                std::env::set_var("SSL_CERT_FILE", ca_file);
+            }
+        }
+
         // SAFETY: all pointers are valid for the call (C copies strings and callbacks), the
         // callbacks match the C signatures, and `shared` outlives the context (see Drop).
         let raw = unsafe {

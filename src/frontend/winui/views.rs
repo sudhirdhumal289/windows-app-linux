@@ -184,7 +184,6 @@ fn more_button(ctx: &ViewContext<MainApp>, card: &CardView) -> View {
             item_menu(&card.item, card.busy),
             ctx.callback(move |label: String| Msg::ItemMenu(target.clone(), label)),
         ))
-        .tooltip("More options")
 }
 
 /// Status line (Cloud PCs) or last use.
@@ -478,6 +477,7 @@ pub fn account_button(
     name: Option<&str>,
     upn: Option<&str>,
     menu: Vec<windows_reactor::MenuItem>,
+    is_pane_open: bool,
 ) -> View {
     let title = name.or(upn).unwrap_or("Not signed in");
     let initials: String = title
@@ -487,42 +487,53 @@ pub fn account_button(
         .take(2)
         .collect::<String>()
         .to_uppercase();
-    let subtitle = if name.is_some() {
-        upn.unwrap_or_default()
+    let person_picture = PersonPicture::new()
+        .display_name(title)
+        .initials(initials)
+        .width(32.0)
+        .height(32.0);
+
+    let content: View = if is_pane_open {
+        let subtitle = if name.is_some() {
+            upn.unwrap_or_default()
+        } else {
+            ""
+        };
+        let mut texts: Vec<(String, View)> = vec![(
+            "name".into(),
+            TextBlock::new()
+                .text(title)
+                .text_trimming(TextTrimming::CharacterEllipsis)
+                .into(),
+        )];
+        if !subtitle.is_empty() {
+            texts.push(("upn".into(), caption(subtitle).into()));
+        }
+        Grid::new()
+            .columns([GridLength::Auto, GridLength::Star(1.0)])
+            .column_spacing(12.0)
+            .children((
+                person_picture,
+                StackPanel::new()
+                    .grid_column(1)
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .keyed_children(texts),
+            ))
+            .into()
     } else {
-        ""
+        person_picture.into()
     };
-    let mut texts: Vec<(String, View)> = vec![(
-        "name".into(),
-        TextBlock::new()
-            .text(title)
-            .text_trimming(TextTrimming::CharacterEllipsis)
-            .into(),
-    )];
-    if !subtitle.is_empty() {
-        texts.push(("upn".into(), caption(subtitle).into()));
-    }
+
     Button::new()
         .style(ButtonStyle::Subtle)
-        .horizontal_alignment(HorizontalAlignment::Stretch)
+        .horizontal_alignment(if is_pane_open {
+            HorizontalAlignment::Stretch
+        } else {
+            HorizontalAlignment::Center
+        })
         .horizontal_content_alignment(HorizontalAlignment::Left)
         .margin(Thickness::xy(4.0, 4.0))
-        .content(
-            Grid::new()
-                .columns([GridLength::Auto, GridLength::Star(1.0)])
-                .column_spacing(12.0)
-                .children((
-                    PersonPicture::new()
-                        .display_name(title)
-                        .initials(initials)
-                        .width(32.0)
-                        .height(32.0),
-                    StackPanel::new()
-                        .grid_column(1)
-                        .vertical_alignment(VerticalAlignment::Center)
-                        .keyed_children(texts),
-                )),
-        )
+        .content(content)
         .menu(Menu::new(menu, ctx.callback(Msg::AccountMenu)))
-        .tooltip("Account")
+        .into()
 }

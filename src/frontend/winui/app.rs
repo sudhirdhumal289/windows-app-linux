@@ -70,6 +70,7 @@ pub enum Msg {
     SignInDone(bool),
     Search(String),
     QuickConnect,
+    PaneToggled(bool),
     Navigate(Option<String>),
     SectionExpanded(String, bool),
     ToggleListMode,
@@ -159,6 +160,7 @@ pub struct MainApp {
     loading: bool,
     signing_in: bool,
     search: String,
+    is_pane_open: bool,
     page: String,
     list_mode: bool,
     status: Option<Status>,
@@ -1196,8 +1198,7 @@ impl MainApp {
                     .children((
                         DropDownButton::new()
                             .content(icon_label("\u{E710}", "Add"))
-                            .menu(views::add_menu(ctx))
-                            .tooltip("Add a connection"),
+                            .menu(views::add_menu(ctx)),
                         Button::new()
                             .style(ButtonStyle::Subtle)
                             .is_enabled(!self.loading)
@@ -1328,6 +1329,7 @@ impl Component for MainApp {
             loading: false,
             signing_in: false,
             search: String::new(),
+            is_pane_open: true,
             page: NAV_ALL.to_string(),
             list_mode: config.view_mode == "list",
             status: None,
@@ -1382,6 +1384,7 @@ impl Component for MainApp {
                     self.save_view_config();
                 }
             }
+            Msg::PaneToggled(open) => self.is_pane_open = open,
             Msg::ToggleListMode => {
                 self.list_mode = !self.list_mode;
                 self.save_view_config();
@@ -1466,7 +1469,7 @@ impl Component for MainApp {
         ctx.window_title(APP_NAME);
         ctx.window_visuals(
             WindowVisuals::new()
-                .backdrop(WindowBackdrop::None)
+                .backdrop(WindowBackdrop::Mica)
                 .client_size(1100.0, 720.0)
                 .constraints(WindowConstraints {
                     min_width: Some(640.0),
@@ -1487,7 +1490,9 @@ impl Component for MainApp {
         let account = self.account.as_ref();
         let navigation = NavigationView::new()
             .grid_row(1)
-            .pane_display_mode(NavigationViewPaneDisplayMode::Auto)
+            .pane_display_mode(NavigationViewPaneDisplayMode::Left)
+            .is_pane_open(self.is_pane_open)
+            .on_is_pane_open_changed(ctx.callback(Msg::PaneToggled))
             .is_settings_visible(false)
             .is_back_button_visible(NavigationViewBackButtonVisible::Collapsed)
             .open_pane_length(280.0)
@@ -1501,49 +1506,43 @@ impl Component for MainApp {
                         account.and_then(|a| a.display_name.as_deref()),
                         account.and_then(|a| a.upn.as_deref()),
                         self.account_menu(),
+                        self.is_pane_open,
                     ),
                 ),
                 SlotView::new(NavigationViewSlot::Content, content),
             ]);
 
-        let top_bar = Border::new()
-            .grid_row(0)
-            .padding(Thickness::xy(16.0, 8.0))
-            .content(
-                AutoSuggestBox::new()
-                    .width(360.0)
-                    .horizontal_alignment(HorizontalAlignment::Left)
-                    .vertical_alignment(VerticalAlignment::Center)
-                    .placeholder_text("Search or enter a PC name to connect")
-                    .items_source(self.suggestions())
-                    .on_text_changed(ctx.callback(Msg::Search))
-                    .on_suggestion_chosen(ctx.callback(Msg::Search)),
-            );
+        let search_box = AutoSuggestBox::new()
+            .text(&self.search)
+            .width(360.0)
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .vertical_alignment(VerticalAlignment::Center)
+            .placeholder_text("Search or enter a PC name to connect")
+            .items_source(self.suggestions())
+            .on_text_changed(ctx.callback(Msg::Search))
+            .on_suggestion_chosen(ctx.callback(Msg::Search));
 
-        let mut children: Vec<KeyedView> = vec![
-            KeyedView::new("topbar", top_bar),
-            KeyedView::new("navigation", navigation),
-        ];
-        if let Some(dialog) = self.dialogs.front() {
-            children.push(KeyedView::new(
+        let top_bar = TitleBar::new()
+            .grid_row(0)
+            .title(APP_NAME)
+            .slots([SlotView::new(TitleBarSlot::Content, search_box)]);
+
+        let dialog_view = if let Some(dialog) = self.dialogs.front() {
+            KeyedView::new(
                 dialog.serial,
                 dialogs::view(&dialog.spec, ctx.callback(Msg::DialogDone)),
-            ));
-        }
+            )
+        } else {
+            KeyedView::new("dialog_idle", ContentDialog::new().is_open(false))
+        };
+
+        let children: Vec<KeyedView> = vec![
+            KeyedView::new("topbar", top_bar),
+            KeyedView::new("navigation", navigation),
+            dialog_view,
+        ];
         Grid::new()
             .rows([GridLength::Auto, GridLength::Star(1.0)])
-            .key_accelerators(KeyAccelerators::new([
-                KeyAccelerator::new(
-                    AcceleratorKey::R,
-                    AcceleratorModifiers::Control,
-                    ctx.callback(|()| Msg::Refresh),
-                ),
-                KeyAccelerator::new(
-                    AcceleratorKey::Enter,
-                    AcceleratorModifiers::Control,
-                    ctx.callback(|()| Msg::QuickConnect),
-                ),
-            ]))
             .keyed_children(children)
     }
 }

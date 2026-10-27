@@ -289,6 +289,7 @@ pub fn open(launch: Launch, prepared: PreparedSession, notify: Notifier) -> Resu
     SESSIONS.with_borrow_mut(|sessions| sessions.insert(key, Rc::clone(&session)));
 
     win32::apply_window_chrome(hwnd);
+    win32::set_window_icon(hwnd);
     center_on_work_area(hwnd, work);
     rebuild_menu(hwnd, &session);
     update_title(hwnd, &session);

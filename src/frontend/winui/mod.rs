@@ -78,19 +78,23 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<app::Startup, St
 }
 
 /// Points the OpenSSL copy bundled next to the executable to its `ossl-modules` directory
-/// (for the legacy provider needed by FreeRDP for NTLM).
+/// (for the legacy provider needed by FreeRDP for NTLM) and ensures OpenSSL has access to
+/// a valid Root CA certificate bundle for TLS verification (e.g. ARM/AVD endpoints).
 fn configure_bundled_openssl() {
     if std::env::var_os("OPENSSL_MODULES").is_none() {
         if let Ok(exe) = std::env::current_exe() {
             if let Some(dir) = exe.parent() {
                 let modules = dir.join("ossl-modules");
                 if modules.is_dir() {
-                    std::env::set_var("OPENSSL_MODULES", &modules);
+                    crate::platform::set_crt_var("OPENSSL_MODULES", &modules);
                 } else if dir.join("legacy.dll").is_file() {
-                    std::env::set_var("OPENSSL_MODULES", dir);
+                    crate::platform::set_crt_var("OPENSSL_MODULES", dir);
                 }
             }
         }
+    }
+    if std::env::var_os("SSL_CERT_FILE").is_none() && std::env::var_os("SSL_CERT_DIR").is_none() {
+        let _ = crate::platform::ensure_ca_bundle();
     }
 }
 

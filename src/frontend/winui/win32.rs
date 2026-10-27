@@ -41,6 +41,8 @@ use windows::Win32::UI::Shell::{
     FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
+    GetSystemMetrics, LoadImageW, SendMessageW, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR,
+    SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, WM_SETICON,
     CallWindowProcW, CreateWindowExW, DefWindowProcW, EnumThreadWindows, GetClassNameW, IsWindow,
     IsWindowVisible, MessageBoxW, PostMessageW, RegisterClassExW, SetWindowLongPtrW, GWLP_WNDPROC,
     HWND_MESSAGE, IDCANCEL, IDNO, IDOK, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING,
@@ -172,6 +174,50 @@ struct CloseGuard {
 
 /// Finds the main WinUI window of this thread and asks `allow` before it closes. Returns
 /// whether the window was found (call again later if not).
+/// Sets the application icon (from embedded resource ID 1) on the specified HWND.
+pub fn set_window_icon(hwnd: HWND) {
+    let Ok(instance) = (unsafe { GetModuleHandleW(None) }) else {
+        return;
+    };
+    unsafe {
+        let cx_big = GetSystemMetrics(SM_CXICON);
+        let cy_big = GetSystemMetrics(SM_CYICON);
+        if let Ok(handle) = LoadImageW(
+            Some(instance.into()),
+            PCWSTR(1 as *const u16),
+            IMAGE_ICON,
+            cx_big,
+            cy_big,
+            LR_DEFAULTCOLOR,
+        ) {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_BIG as usize)),
+                Some(LPARAM(handle.0 as isize)),
+            );
+        }
+
+        let cx_small = GetSystemMetrics(SM_CXSMICON);
+        let cy_small = GetSystemMetrics(SM_CYSMICON);
+        if let Ok(handle) = LoadImageW(
+            Some(instance.into()),
+            PCWSTR(1 as *const u16),
+            IMAGE_ICON,
+            cx_small,
+            cy_small,
+            LR_DEFAULTCOLOR,
+        ) {
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(ICON_SMALL as usize)),
+                Some(LPARAM(handle.0 as isize)),
+            );
+        }
+    }
+}
+
 pub fn install_close_guard(allow: impl Fn() -> bool + 'static) -> bool {
     if CLOSE_GUARD.with_borrow(Option::is_some) {
         return true;
@@ -179,6 +225,7 @@ pub fn install_close_guard(allow: impl Fn() -> bool + 'static) -> bool {
     let Some(hwnd) = find_winui_window() else {
         return false;
     };
+    set_window_icon(hwnd);
     MAIN_WINDOW.set(hwnd_key(hwnd));
     // SAFETY: replaces the window procedure of a window owned by this thread; the previous
     // procedure is kept and called for every message (`guard_proc`).

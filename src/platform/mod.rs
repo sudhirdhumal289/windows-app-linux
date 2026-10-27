@@ -25,6 +25,14 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use self::macos::*;
 
+#[cfg(not(target_os = "windows"))]
+/// Ensures a valid CA certificate bundle exists and returns its path (Windows only; on Unix
+/// OpenSSL and curl use the platform's standard certificate paths).
+#[must_use]
+pub fn ensure_ca_bundle() -> Option<std::path::PathBuf> {
+    None
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod other {
     /// Desktop scale in percent as configured in the OS, if it can be determined.

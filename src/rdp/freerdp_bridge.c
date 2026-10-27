@@ -30,7 +30,9 @@
 #include <winpr/user.h>
 #include <winpr/wlog.h>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <pthread.h>
 #endif
 
@@ -190,8 +192,25 @@ static BOOL bridge_log_message(const wLogMessage* msg) {
     const char* prefix = msg->PrefixString ? msg->PrefixString : "";
     const char* text = msg->TextString ? msg->TextString : "";
     (void)fprintf(stderr, "%s%s\n", prefix, text);
+    (void)fflush(stderr);
+#if defined(_WIN32)
+    OutputDebugStringA(prefix);
+    OutputDebugStringA(text);
+    OutputDebugStringA("\n");
+#endif
     if (msg->Level >= WLOG_ERROR && text[0] != '\0') {
-        (void)snprintf(g_last_log_error, sizeof(g_last_log_error), "%s", text);
+        /* If we already captured a specific error on this thread, don't let a generic
+         * wrapper message ("error retrieving ARM configuration" or "Failed to check FreeRDP file format")
+         * overwrite it and hide the root cause from the user. Instead, prepend the wrapper context. */
+        if (g_last_log_error[0] != '\0' &&
+            (strstr(text, "error retrieving ARM configuration") != NULL ||
+             strstr(text, "Failed to check FreeRDP file format") != NULL)) {
+            char prev[256];
+            (void)snprintf(prev, sizeof(prev), "%s", g_last_log_error);
+            (void)snprintf(g_last_log_error, sizeof(g_last_log_error), "%s: %s", text, prev);
+        } else {
+            (void)snprintf(g_last_log_error, sizeof(g_last_log_error), "%s", text);
+        }
         size_t len = strlen(g_last_log_error);
         while (len > 0 && (g_last_log_error[len - 1] == '\n' || g_last_log_error[len - 1] == '\r')) {
             g_last_log_error[--len] = '\0';
@@ -200,7 +219,69 @@ static BOOL bridge_log_message(const wLogMessage* msg) {
     return TRUE;
 }
 
+#if defined(_WIN32)
+static void bridge_sync_crt_env(const char* name) {
+    char buf[1024];
+    DWORD len = GetEnvironmentVariableA(name, buf, sizeof(buf));
+    if (len > 0 && len < sizeof(buf)) {
+        _putenv_s(name, buf);
+    }
+}
+
+static void bridge_init_windows_environment(void) {
+    bridge_sync_crt_env("SSL_CERT_FILE");
+    bridge_sync_crt_env("SSL_CERT_DIR");
+    bridge_sync_crt_env("OPENSSL_MODULES");
+    bridge_sync_crt_env("OPENSSL_CONF");
+    bridge_sync_crt_env("WLOG_LEVEL");
+    bridge_sync_crt_env("WLOG_APPENDER");
+    bridge_sync_crt_env("RDP_DEBUG");
+
+    /* If SSL_CERT_FILE is still not set in CRT, check if the app's CA bundle exists */
+    if (!getenv("SSL_CERT_FILE") && !getenv("SSL_CERT_DIR")) {
+        char local_app_data[MAX_PATH];
+        DWORD len = GetEnvironmentVariableA("LOCALAPPDATA", local_app_data, sizeof(local_app_data));
+        if (len > 0 && len < sizeof(local_app_data)) {
+            char ca_path[MAX_PATH + 32];
+            (void)snprintf(ca_path, sizeof(ca_path), "%s\\windows-app\\ca-bundle.crt", local_app_data);
+            DWORD attr = GetFileAttributesA(ca_path);
+            if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+                _putenv_s("SSL_CERT_FILE", ca_path);
+            }
+        }
+    }
+
+    /* Ensure OPENSSL_MODULES is populated next to the executable if not already set */
+    if (!getenv("OPENSSL_MODULES")) {
+        char exe_path[MAX_PATH];
+        DWORD len = GetModuleFileNameA(NULL, exe_path, sizeof(exe_path));
+        if (len > 0 && len < sizeof(exe_path)) {
+            char* last_slash = strrchr(exe_path, '\\');
+            if (last_slash) {
+                *last_slash = '\0';
+                char modules_path[MAX_PATH + 32];
+                (void)snprintf(modules_path, sizeof(modules_path), "%s\\ossl-modules", exe_path);
+                DWORD attr = GetFileAttributesA(modules_path);
+                if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+                    _putenv_s("OPENSSL_MODULES", modules_path);
+                } else {
+                    char legacy_dll[MAX_PATH + 32];
+                    (void)snprintf(legacy_dll, sizeof(legacy_dll), "%s\\legacy.dll", exe_path);
+                    DWORD lattr = GetFileAttributesA(legacy_dll);
+                    if (lattr != INVALID_FILE_ATTRIBUTES && !(lattr & FILE_ATTRIBUTE_DIRECTORY)) {
+                        _putenv_s("OPENSSL_MODULES", exe_path);
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
+
 static void bridge_init_logging(void) {
+#if defined(_WIN32)
+    bridge_init_windows_environment();
+#endif
     wLog* root = WLog_GetRoot();
     if (root && !getenv("WLOG_LEVEL")) {
         WLog_SetLogLevel(root, WLOG_WARN);
@@ -216,6 +297,9 @@ static void bridge_init_logging(void) {
     }
     if (getenv("RDP_DEBUG")) {
         WLog_SetLogLevel(bridge_log(), WLOG_DEBUG);
+        if (root) {
+            WLog_SetLogLevel(root, WLOG_DEBUG);
+        }
     }
 }
 
@@ -695,6 +779,10 @@ static DWORD WINAPI bridge_client_thread(LPVOID arg) {
     rdpContext* context = (rdpContext*)arg;
     BridgeClientContext* bctx = (BridgeClientContext*)context;
     freerdp* instance = context->instance;
+
+#if defined(_WIN32)
+    bridge_init_windows_environment();
+#endif
 
     bridge_status(bctx, RDP_BRIDGE_STATUS_PROGRESS, "Connecting...");
     bctx->failure_hint = NULL;

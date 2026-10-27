@@ -32,6 +32,7 @@ fn main() {
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let runtime_bundled = bundle_windows_app_sdk(&target_os);
     embed_windows_manifest(&manifest_dir, &target_os, runtime_bundled);
+    embed_windows_resources(&manifest_dir, &target_os);
     let host = env::var("HOST").unwrap_or_default();
     let cross_os = !match target_os.as_str() {
         "macos" => host.contains("darwin"),
@@ -166,6 +167,78 @@ fn embed_windows_manifest(manifest_dir: &Path, target_os: &str, runtime_bundled:
             manifest.display()
         );
     }
+}
+
+/// Compiles `packaging/windows/app.rc` into a `.res` file using `rc.exe` and embeds it
+/// into the executable, providing the application icon for Windows Explorer, Taskbar,
+/// and Alt-Tab.
+fn embed_windows_resources(manifest_dir: &Path, target_os: &str) {
+    if target_os != "windows" || env::var_os("CARGO_FEATURE_WINUI").is_none() {
+        return;
+    }
+    let rc_file = manifest_dir.join("packaging/windows/app.rc");
+    println!("cargo:rerun-if-changed={}", rc_file.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        manifest_dir.join("packaging/windows/AppIcon.ico").display()
+    );
+
+    let Some(out_dir) = env::var_os("OUT_DIR").map(PathBuf::from) else {
+        return;
+    };
+    let res_file = out_dir.join("app.res");
+
+    let Some(rc_exe) = find_rc_exe() else {
+        println!("cargo:warning=Resource compiler (rc.exe) not found; skipping icon embedding");
+        return;
+    };
+
+    let status = Command::new(rc_exe)
+        .arg("/r")
+        .arg("/fo")
+        .arg(&res_file)
+        .arg(&rc_file)
+        .current_dir(manifest_dir.join("packaging/windows"))
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!("cargo:rustc-link-arg-bins={}", res_file.display());
+        }
+        Ok(s) => {
+            println!("cargo:warning=rc.exe failed with {s}");
+        }
+        Err(e) => {
+            println!("cargo:warning=Could not execute rc.exe: {e}");
+        }
+    }
+}
+
+fn find_rc_exe() -> Option<PathBuf> {
+    if let Ok(output) = Command::new("rc.exe").arg("/?").output() {
+        if output.status.success() {
+            return Some(PathBuf::from("rc.exe"));
+        }
+    }
+    let program_files = env::var_os("ProgramFiles(x86)")
+        .or_else(|| env::var_os("ProgramFiles"))
+        .map(PathBuf::from)?;
+    let kits_bin = program_files.join("Windows Kits").join("10").join("bin");
+    if let Ok(entries) = fs::read_dir(kits_bin) {
+        let mut versions: Vec<PathBuf> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        versions.sort();
+        for ver_dir in versions.into_iter().rev() {
+            let rc = ver_dir.join("x64").join("rc.exe");
+            if rc.is_file() {
+                return Some(rc);
+            }
+        }
+    }
+    None
 }
 
 /// Makes WinUI builds self-contained: the Windows App SDK runtime (downloaded from NuGet
