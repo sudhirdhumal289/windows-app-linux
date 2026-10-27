@@ -96,7 +96,12 @@ fn configure_bundled_openssl() {
 
 /// Shows a modal error message box before exiting.
 pub fn show_fatal_error(message: &str) {
-    win32::message(None, "Windows App - Fatal Error", message, win32::Icon::Error);
+    win32::message(
+        None,
+        "Windows App - Fatal Error",
+        message,
+        win32::Icon::Error,
+    );
 }
 
 /// Runs the app until its main window closes.

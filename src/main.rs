@@ -21,9 +21,11 @@ fn install_panic_hook() {
             .location()
             .map(|l| format!(" at {}:{}", l.file(), l.line()))
             .unwrap_or_default();
-        let msg = format!("Windows App encountered a fatal error:
+        let msg = format!(
+            "Windows App encountered a fatal error:
 
-{payload}{location}");
+{payload}{location}"
+        );
         log::error!("{msg}");
         eprintln!("{msg}");
         if let Ok(mut dir) = std::env::current_exe() {
