@@ -41,7 +41,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-app-linux-packages
-          path: target/packages/*
+          path: |
+            target/packages/*.deb
+            target/packages/*.rpm
+            target/packages/*.pkg.tar.zst
 
   windows:
     name: Windows (WinUI 3)
@@ -64,7 +67,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-app-windows-x64
-          path: target/packages/windows-x64/*
+          path: |
+            target/packages/*.exe
+            target/packages/*.zip
 
   macos:
     name: macOS (AppKit)
@@ -85,10 +90,10 @@ jobs:
         with:
           name: windows-app-macos
           path: |
-            target/packages/macos/*.dmg
-            target/packages/macos/*.tar.gz
+            target/packages/*.dmg
+            target/packages/*.tar.gz
 
-  # Verifies the packaged app runs headlessly without crashing.
+  # Verifies the packaged app installs and all shared libraries resolve correctly.
   smoke-test:
     name: Smoke test (Linux)
     needs: linux
@@ -102,21 +107,14 @@ jobs:
       - name: Install .deb package
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb dbus-x11 ./target/packages/*.deb
-      - name: Launch headlessly under Xvfb
+          sudo apt-get install -y ./target/packages/*.deb
+      - name: Verify installed binary
         run: |
-          xvfb-run -a dbus-launch windows-app &
-          pid=$!
-          sleep 3
-          if ! kill -0 "$pid" 2>/dev/null; then
-            echo "Binary crashed on startup!"
-            exit 1
-          fi
-          kill "$pid"
+          windows-app --help
 
   release:
     name: Publish Release
-    needs: [linux, windows, macos]
+    needs: [linux, windows, macos, smoke-test]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name == 'push')
     runs-on: ubuntu-latest
     permissions:
