@@ -197,9 +197,7 @@ fn simple_cb<E: 'static>(
     ctx: &ViewContext<super::app::MainApp>,
     f: impl Fn(E) -> SimpleMsg + 'static,
 ) -> Callback<E> {
-    ctx.callback(move |e| {
-        super::app::Msg::Dialog(DialogMsg::Simple(f(e)))
-    })
+    ctx.callback(move |e| super::app::Msg::Dialog(DialogMsg::Simple(f(e))))
 }
 
 pub struct SimpleDialog {

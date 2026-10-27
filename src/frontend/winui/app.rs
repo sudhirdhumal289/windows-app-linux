@@ -1028,7 +1028,10 @@ impl MainApp {
         let Some(Queued { purpose, .. }) = self.dialogs.pop_front() else {
             return;
         };
-        self.active_dialog = self.dialogs.front().map(|q| dialogs::ActiveDialog::new(&q.spec));
+        self.active_dialog = self
+            .dialogs
+            .front()
+            .map(|q| dialogs::ActiveDialog::new(&q.spec));
         match (purpose, outcome) {
             (_, Outcome::Cancelled) | (Purpose::Info, _) => {}
             (Purpose::Restart(pc), Outcome::Confirmed) => {
@@ -1540,14 +1543,12 @@ impl Component for MainApp {
             .title(APP_NAME)
             .slots([SlotView::new(TitleBarSlot::Content, search_box)]);
 
-        let dialog_view = if let (Some(dialog), Some(active)) = (self.dialogs.front(), &self.active_dialog) {
-            KeyedView::new(
-                dialog.serial,
-                active.view(ctx),
-            )
-        } else {
-            KeyedView::new("dialog_idle", ContentDialog::new().is_open(false))
-        };
+        let dialog_view =
+            if let (Some(dialog), Some(active)) = (self.dialogs.front(), &self.active_dialog) {
+                KeyedView::new(dialog.serial, active.view(ctx))
+            } else {
+                KeyedView::new("dialog_idle", ContentDialog::new().is_open(false))
+            };
 
         let children: Vec<KeyedView> = vec![
             KeyedView::new("topbar", top_bar),

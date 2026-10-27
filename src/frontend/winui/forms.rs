@@ -23,33 +23,21 @@ fn cred_cb<E: 'static>(
     ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
     f: impl Fn(E) -> CredentialsMsg + 'static,
 ) -> Callback<E> {
-    ctx.callback(move |e| {
-        crate::frontend::winui::app::Msg::Dialog(
-            DialogMsg::Credentials(f(e)),
-        )
-    })
+    ctx.callback(move |e| crate::frontend::winui::app::Msg::Dialog(DialogMsg::Credentials(f(e))))
 }
 
 fn remote_cb<E: 'static>(
     ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
     f: impl Fn(E) -> RemotePcMsg + 'static,
 ) -> Callback<E> {
-    ctx.callback(move |e| {
-        crate::frontend::winui::app::Msg::Dialog(
-            DialogMsg::RemotePc(f(e)),
-        )
-    })
+    ctx.callback(move |e| crate::frontend::winui::app::Msg::Dialog(DialogMsg::RemotePc(f(e))))
 }
 
 fn settings_cb<E: 'static>(
     ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
     f: impl Fn(E) -> SettingsMsg + 'static,
 ) -> Callback<E> {
-    ctx.callback(move |e| {
-        crate::frontend::winui::app::Msg::Dialog(
-            DialogMsg::Settings(f(e)),
-        )
-    })
+    ctx.callback(move |e| crate::frontend::winui::app::Msg::Dialog(DialogMsg::Settings(f(e))))
 }
 
 fn section_title(text: &str) -> TextBlock {
@@ -313,9 +301,7 @@ pub struct RemotePcDialog {
 
 impl RemotePcDialog {
     pub fn new(existing: Option<SavedConnection>) -> Self {
-        let base = existing
-            .clone()
-            .unwrap_or_else(SavedConnection::blank);
+        let base = existing.clone().unwrap_or_else(SavedConnection::blank);
         let gateway = base.gateway.clone().unwrap_or_default();
         let app = base.remote_app.clone().unwrap_or_default();
         Self {
@@ -393,7 +379,13 @@ impl RemotePcDialog {
         }
     }
 
-    fn text(&self, ctx: &ViewContext<crate::frontend::winui::app::MainApp>, field: Field, label: &str, enabled: bool) -> View {
+    fn text(
+        &self,
+        ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
+        field: Field,
+        label: &str,
+        enabled: bool,
+    ) -> View {
         text_field(
             label,
             self.field(field),
@@ -402,7 +394,13 @@ impl RemotePcDialog {
         )
     }
 
-    fn flag(&self, ctx: &ViewContext<crate::frontend::winui::app::MainApp>, flag: Flag, label: &str, checked: bool) -> View {
+    fn flag(
+        &self,
+        ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
+        flag: Flag,
+        label: &str,
+        checked: bool,
+    ) -> View {
         check(
             label,
             checked,
@@ -803,7 +801,12 @@ impl SettingsDialog {
             .collect()
     }
 
-    fn toggle_view(&self, ctx: &ViewContext<crate::frontend::winui::app::MainApp>, toggle: Toggle, label: &str) -> View {
+    fn toggle_view(
+        &self,
+        ctx: &ViewContext<crate::frontend::winui::app::MainApp>,
+        toggle: Toggle,
+        label: &str,
+    ) -> View {
         let mut overrides = self.overrides.clone();
         let current = *toggle.slot(&mut overrides);
         combo(

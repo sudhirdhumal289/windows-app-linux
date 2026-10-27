@@ -41,13 +41,13 @@ use windows::Win32::UI::Shell::{
     FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, SIGDN_FILESYSPATH,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetSystemMetrics, LoadImageW, SendMessageW, ICON_BIG, ICON_SMALL, IMAGE_ICON, LR_DEFAULTCOLOR,
-    SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, WM_SETICON,
-    CallWindowProcW, CreateWindowExW, DefWindowProcW, EnumThreadWindows, GetClassNameW, IsWindow,
-    IsWindowVisible, MessageBoxW, PostMessageW, RegisterClassExW, SetWindowLongPtrW, GWLP_WNDPROC,
-    HWND_MESSAGE, IDCANCEL, IDNO, IDOK, IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING,
-    MB_OK, MB_OKCANCEL, MB_YESNOCANCEL, MESSAGEBOX_STYLE, SW_SHOWNORMAL, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CLOSE, WNDCLASSEXW, WNDPROC,
+    CallWindowProcW, CreateWindowExW, DefWindowProcW, EnumThreadWindows, GetClassNameW,
+    GetSystemMetrics, IsWindow, IsWindowVisible, LoadImageW, MessageBoxW, PostMessageW,
+    RegisterClassExW, SendMessageW, SetWindowLongPtrW, GWLP_WNDPROC, HWND_MESSAGE, ICON_BIG,
+    ICON_SMALL, IDCANCEL, IDNO, IDOK, IDYES, IMAGE_ICON, LR_DEFAULTCOLOR, MB_ICONERROR,
+    MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MB_YESNOCANCEL, MESSAGEBOX_STYLE,
+    SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SW_SHOWNORMAL, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_APP, WM_CLOSE, WM_SETICON, WNDCLASSEXW, WNDPROC,
 };
 
 /// Window class of the top-level windows created by WinUI 3 desktop apps.

@@ -279,7 +279,8 @@ impl Session {
         keys.setToolTip(Some(&ns("Send keys and other actions")));
         let quality = toolbar::view_item(mtm, "quality", "Connection", &self.quality);
         self.quality.setFrameSize(NSSize::new(22.0, 22.0));
-        self.quality.setImage(util::symbol("wifi", "Connection: Measuring").as_deref());
+        self.quality
+            .setImage(util::symbol("wifi", "Connection: Measuring").as_deref());
         self.quality.setToolTip(Some(&ns("Connection: Measuring")));
 
         // SAFETY: Reading an immutable extern string constant.
@@ -655,8 +656,10 @@ impl Session {
         if message.is_empty() {
             self.window.setSubtitle(&ns("Disconnected"));
         }
-        self.quality.setImage(util::symbol("wifi.slash", "Connection: Disconnected").as_deref());
-        self.quality.setToolTip(Some(&ns("Connection: Disconnected")));
+        self.quality
+            .setImage(util::symbol("wifi.slash", "Connection: Disconnected").as_deref());
+        self.quality
+            .setToolTip(Some(&ns("Connection: Disconnected")));
         if self.is_full_screen() {
             self.window.toggleFullScreen(None);
         }

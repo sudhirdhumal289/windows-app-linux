@@ -146,7 +146,8 @@ struct CERT_CONTEXT {
 
 #[link(name = "crypt32")]
 extern "system" {
-    fn CertOpenSystemStoreW(hprov: usize, szsubsystemprotocol: *const u16) -> *mut std::ffi::c_void;
+    fn CertOpenSystemStoreW(hprov: usize, szsubsystemprotocol: *const u16)
+        -> *mut std::ffi::c_void;
     fn CertEnumCertificatesInStore(
         hcertstore: *mut std::ffi::c_void,
         pprevcertcontext: *const CERT_CONTEXT,
@@ -298,7 +299,10 @@ pub fn ensure_ca_bundle() -> Option<PathBuf> {
     let bundle = generate_windows_ca_bundle();
     if !bundle.is_empty() {
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            log::warn!("Could not create cache dir for CA bundle {}: {e}", cache_dir.display());
+            log::warn!(
+                "Could not create cache dir for CA bundle {}: {e}",
+                cache_dir.display()
+            );
         } else if let Err(e) = std::fs::write(&target, bundle.as_bytes()) {
             log::warn!("Could not write CA bundle {}: {e}", target.display());
         } else {
@@ -334,15 +338,25 @@ mod tests {
     #[test]
     fn test_ensure_ca_bundle() {
         let ca_file = ensure_ca_bundle();
-        assert!(ca_file.is_some(), "Expected ensure_ca_bundle to return a valid path");
+        assert!(
+            ca_file.is_some(),
+            "Expected ensure_ca_bundle to return a valid path"
+        );
         let path = ca_file.unwrap();
-        assert!(path.is_file(), "CA bundle file should exist: {}", path.display());
+        assert!(
+            path.is_file(),
+            "CA bundle file should exist: {}",
+            path.display()
+        );
 
         // Verify that the C runtime getenv() can see SSL_CERT_FILE.
         extern "C" {
             fn getenv(name: *const std::ffi::c_char) -> *const std::ffi::c_char;
         }
         let env_val = unsafe { getenv(b"SSL_CERT_FILE\0".as_ptr().cast()) };
-        assert!(!env_val.is_null(), "C runtime getenv('SSL_CERT_FILE') must not be null");
+        assert!(
+            !env_val.is_null(),
+            "C runtime getenv('SSL_CERT_FILE') must not be null"
+        );
     }
 }
