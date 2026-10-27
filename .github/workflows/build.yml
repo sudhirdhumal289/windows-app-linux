@@ -24,19 +24,34 @@ jobs:
           sudo apt-get install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
             libwebkitgtk-6.0-dev libsoup-3.0-dev freerdp3-dev libwinpr3-dev libfuse3-dev rpm zstd
           # Provide libfuse3.so.4 compatibility symlink if only libfuse3.so.3 is available
-          if [ -f /usr/lib/x86_64-linux-gnu/libfuse3.so.3 ] && [ ! -f /usr/lib/x86_64-linux-gnu/libfuse3.so.4 ]; then
-            sudo ln -sf libfuse3.so.3 /usr/lib/x86_64-linux-gnu/libfuse3.so.4
-            sudo /sbin/ldconfig || true
-          fi
+          for f in /usr/lib/x86_64-linux-gnu/libfuse3.so.3* /lib/x86_64-linux-gnu/libfuse3.so.3*; do
+            if [ -f "$f" ] && [ ! -f /usr/lib/x86_64-linux-gnu/libfuse3.so.4 ]; then
+              sudo ln -sf "$f" /usr/lib/x86_64-linux-gnu/libfuse3.so.4
+              sudo /sbin/ldconfig || true
+              break
+            fi
+          done
       - name: Fetch FreeRDP 3.32+ Bundle
-        run: ./scripts/fetch-freerdp.sh
+        run: |
+          ./scripts/fetch-freerdp.sh
+          BUNDLE_LIB="$(pwd)/freerdp-3.32/lib/x86_64-linux-gnu"
+          if [ -d "$BUNDLE_LIB" ]; then
+            echo "$BUNDLE_LIB" | sudo tee /etc/ld.so.conf.d/freerdp-bundle.conf
+            sudo /sbin/ldconfig
+          fi
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --check
       - run: cargo clippy --all-targets
-      - run: cargo test
+      - name: Run cargo test
+        run: |
+          BUNDLE_LIB="$(pwd)/freerdp-3.32/lib/x86_64-linux-gnu"
+          if [ -d "$BUNDLE_LIB" ]; then
+            export LD_LIBRARY_PATH="$BUNDLE_LIB:${LD_LIBRARY_PATH:-}"
+          fi
+          cargo test
       - name: Package Linux Distributions (deb, rpm, opensuse, arch)
         run: |
           ./scripts/package-deb.sh
@@ -110,12 +125,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb dbus-x11 libfuse3-3 ./target/packages/*.deb || sudo apt-get install -y xvfb dbus-x11 ./target/packages/*.deb
-          if [ -f /usr/lib/x86_64-linux-gnu/libfuse3.so.3 ] && [ ! -f /usr/lib/x86_64-linux-gnu/libfuse3.so.4 ]; then
-            sudo ln -sf libfuse3.so.3 /usr/lib/x86_64-linux-gnu/libfuse3.so.4
+          if [ -d /usr/lib/windows-app ]; then
+            echo "/usr/lib/windows-app" | sudo tee /etc/ld.so.conf.d/windows-app.conf
             sudo /sbin/ldconfig || true
           fi
+          for f in /usr/lib/x86_64-linux-gnu/libfuse3.so.3* /lib/x86_64-linux-gnu/libfuse3.so.3*; do
+            if [ -f "$f" ] && [ ! -f /usr/lib/x86_64-linux-gnu/libfuse3.so.4 ]; then
+              sudo ln -sf "$f" /usr/lib/x86_64-linux-gnu/libfuse3.so.4
+              sudo /sbin/ldconfig || true
+              break
+            fi
+          done
       - name: Launch headlessly under Xvfb
         run: |
+          if [ -d /usr/lib/windows-app ]; then
+            export LD_LIBRARY_PATH="/usr/lib/windows-app:${LD_LIBRARY_PATH:-}"
+          fi
           xvfb-run -a dbus-launch windows-app &
           pid=$!
           sleep 3

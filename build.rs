@@ -84,20 +84,28 @@ fn main() {
     }
     if !rpaths.is_empty() && target_os == "linux" {
         println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        println!("cargo:rustc-link-arg-tests=-Wl,--disable-new-dtags");
     }
     for dir in &rpaths {
         if target_os == "macos" {
             println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
+            println!("cargo:rustc-link-arg-tests=-Wl,-rpath,{}", dir.display());
         } else {
             println!("cargo:rustc-link-arg=-Wl,-rpath={}", dir.display());
+            println!("cargo:rustc-link-arg-tests=-Wl,-rpath={}", dir.display());
         }
     }
     // Origin-relative rpath on Linux so the binary finds sibling libraries.
     if target_os == "linux" {
-        println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN/../lib/windows-app");
-        println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN/../lib/windows-app-linux");
-        println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN/../lib");
-        println!("cargo:rustc-link-arg=-Wl,-rpath=$ORIGIN");
+        for flag in [
+            "-Wl,-rpath=$ORIGIN/../lib/windows-app",
+            "-Wl,-rpath=$ORIGIN/../lib/windows-app-linux",
+            "-Wl,-rpath=$ORIGIN/../lib",
+            "-Wl,-rpath=$ORIGIN",
+        ] {
+            println!("cargo:rustc-link-arg={flag}");
+            println!("cargo:rustc-link-arg-tests={flag}");
+        }
     }
 
     let mut builder = cc::Build::new();
@@ -454,13 +462,17 @@ fn copy_linux_so(libs: &[pkg_config::Library]) {
                         let _ = fs::create_dir_all(dest);
                         let _ = fs::remove_file(&target);
                         #[cfg(unix)]
-                        if let Ok(link_dest) = fs::read_link(&path) {
-                            let _ = std::os::unix::fs::symlink(&link_dest, &target);
-                        } else {
-                            let _ = fs::copy(&path, &target);
+                        {
+                            if let Ok(link_dest) = fs::read_link(&path) {
+                                let _ = std::os::unix::fs::symlink(&link_dest, &target);
+                            } else {
+                                let _ = fs::copy(&path, &target);
+                            }
                         }
                         #[cfg(not(unix))]
-                        let _ = fs::copy(&path, &target);
+                        {
+                            let _ = fs::copy(&path, &target);
+                        }
                     }
                 }
             }

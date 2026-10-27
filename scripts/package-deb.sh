@@ -78,6 +78,10 @@ if [ -d "${FREERDP_BUNDLE}" ]; then
     LIB_DEST="${BUILD_DIR}/usr/lib/windows-app"
     mkdir -p "${LIB_DEST}"
     find "${FREERDP_BUNDLE}/lib" -maxdepth 2 -name "*.so*" -exec cp -a {} "${LIB_DEST}/" \;
+
+    mkdir -p "${BUILD_DIR}/etc/ld.so.conf.d"
+    echo "/usr/lib/windows-app" > "${BUILD_DIR}/etc/ld.so.conf.d/windows-app.conf"
+    chmod 644 "${BUILD_DIR}/etc/ld.so.conf.d/windows-app.conf"
 fi
 
 # DEBIAN/control - strictly specifies required system runtime dependencies
@@ -106,6 +110,9 @@ fi
 if [ -x /usr/bin/gtk-update-icon-cache ]; then
     gtk-update-icon-cache -q -f -t /usr/share/icons/hicolor || true
 fi
+if [ -x /sbin/ldconfig ]; then
+    /sbin/ldconfig || true
+fi
 EOF
 chmod 755 "${BUILD_DIR}/DEBIAN/postinst"
 
@@ -119,6 +126,9 @@ fi
 if [ -x /usr/bin/gtk-update-icon-cache ]; then
     gtk-update-icon-cache -q -f -t /usr/share/icons/hicolor || true
 fi
+if [ -x /sbin/ldconfig ]; then
+    /sbin/ldconfig || true
+fi
 EOF
 chmod 755 "${BUILD_DIR}/DEBIAN/postrm"
 
@@ -128,4 +138,3 @@ dpkg-deb --build --root-owner-group "${BUILD_DIR}" "${OUTPUT_DIR}/${PKG_NAME}.de
 
 echo "==> Debian package generated successfully:"
 echo "    ${OUTPUT_DIR}/${PKG_NAME}.deb"
-ls -lh "${OUTPUT_DIR}/${PKG_NAME}.deb"
