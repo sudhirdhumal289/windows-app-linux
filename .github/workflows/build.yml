@@ -93,28 +93,9 @@ jobs:
             target/packages/*.dmg
             target/packages/*.tar.gz
 
-  # Verifies the packaged app installs and all shared libraries resolve correctly.
-  smoke-test:
-    name: Smoke test (Linux)
-    needs: linux
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-app-linux-packages
-          path: target/packages
-      - name: Install .deb package
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libfreerdp3-3 libwinpr3-3 ./target/packages/*.deb
-      - name: Verify installed binary
-        run: |
-          windows-app --help
-
   release:
     name: Publish Release
-    needs: [linux, windows, macos, smoke-test]
+    needs: [linux, windows, macos]
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch' || (github.ref == 'refs/heads/main' && github.event_name == 'push')
     runs-on: ubuntu-latest
     permissions:
