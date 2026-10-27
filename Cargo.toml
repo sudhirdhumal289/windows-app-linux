@@ -1,6 +1,6 @@
 [package]
 name = "windows-app"
-version = "0.2.3"
+version = "0.2.2"
 edition = "2021"
 authors = ["Sudhir <sudhir@local>"]
 description = "Native client for Windows 365, Azure Virtual Desktop and Remote Desktop built with Rust and FreeRDP 3, with GTK 4 / libadwaita, WinUI 3 and AppKit frontends"
