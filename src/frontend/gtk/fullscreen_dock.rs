@@ -8,7 +8,7 @@
 use adw::prelude::*;
 use gtk4::{
     gio, glib, Box, Button, EventControllerMotion, Label, MenuButton, Orientation, Overlay,
-    Separator,
+    Popover, Scale, Separator,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -47,6 +47,10 @@ pub struct FullscreenDock {
     pub quality_icon: gtk4::Image,
     pub scale_button: MenuButton,
     pub session_button: MenuButton,
+    #[allow(dead_code)]
+    pub mic_button: Button,
+    #[allow(dead_code)]
+    pub volume_button: MenuButton,
     pub restore_button: Button,
     pub minimize_button: Button,
     pub disconnect_button: Button,
@@ -76,6 +80,95 @@ impl FullscreenDock {
         dock_box.append(&title_label);
         let quality_icon = super::session_window::quality_icon();
         dock_box.append(&quality_icon);
+        dock_box.append(&Separator::new(Orientation::Vertical));
+
+        let mic_muted = crate::platform::audio::is_mic_muted();
+        let mic_button = Button::builder()
+            .icon_name(if mic_muted {
+                "microphone-disabled-symbolic"
+            } else {
+                "audio-input-microphone-symbolic"
+            })
+            .tooltip_text(if mic_muted {
+                "Unmute Microphone (Currently Muted)"
+            } else {
+                "Mute Microphone"
+            })
+            .build();
+        mic_button.add_css_class("flat");
+        if mic_muted {
+            mic_button.add_css_class("warning");
+        }
+        let mic_btn_weak = mic_button.downgrade();
+        mic_button.connect_clicked(move |_| {
+            let Some(btn) = mic_btn_weak.upgrade() else {
+                return;
+            };
+            let muted = crate::platform::audio::toggle_mic_muted();
+            if muted {
+                btn.set_icon_name("microphone-disabled-symbolic");
+                btn.set_tooltip_text(Some("Unmute Microphone (Currently Muted)"));
+                btn.add_css_class("warning");
+            } else {
+                btn.set_icon_name("audio-input-microphone-symbolic");
+                btn.set_tooltip_text(Some("Mute Microphone"));
+                btn.remove_css_class("warning");
+            }
+        });
+        dock_box.append(&mic_button);
+
+        let current_vol = crate::platform::audio::get_volume();
+        let volume_popover = Popover::new();
+        let vol_box = Box::new(Orientation::Vertical, 6);
+        vol_box.set_margin_top(8);
+        vol_box.set_margin_bottom(8);
+        vol_box.set_margin_start(12);
+        vol_box.set_margin_end(12);
+
+        let vol_label = Label::new(Some(&format!("Volume: {current_vol}%")));
+        vol_label.add_css_class("heading");
+        vol_box.append(&vol_label);
+
+        let vol_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 5.0);
+        vol_scale.set_value(f64::from(current_vol));
+        vol_scale.set_width_request(140);
+        vol_box.append(&vol_scale);
+        volume_popover.set_child(Some(&vol_box));
+
+        let vol_icon = if current_vol == 0 {
+            "audio-volume-muted-symbolic"
+        } else if current_vol < 50 {
+            "audio-volume-low-symbolic"
+        } else {
+            "audio-volume-high-symbolic"
+        };
+        let volume_button = MenuButton::builder()
+            .icon_name(vol_icon)
+            .tooltip_text("Session Volume")
+            .popover(&volume_popover)
+            .build();
+        volume_button.add_css_class("flat");
+
+        let vol_label_weak = vol_label.downgrade();
+        let vol_btn_weak = volume_button.downgrade();
+        vol_scale.connect_value_changed(move |scale| {
+            let vol = scale.value().round().clamp(0.0, 100.0) as u32;
+            crate::platform::audio::set_volume(vol);
+            if let Some(lbl) = vol_label_weak.upgrade() {
+                lbl.set_label(&format!("Volume: {vol}%"));
+            }
+            if let Some(btn) = vol_btn_weak.upgrade() {
+                let icon = if vol == 0 {
+                    "audio-volume-muted-symbolic"
+                } else if vol < 50 {
+                    "audio-volume-low-symbolic"
+                } else {
+                    "audio-volume-high-symbolic"
+                };
+                btn.set_icon_name(icon);
+            }
+        });
+        dock_box.append(&volume_button);
         dock_box.append(&Separator::new(Orientation::Vertical));
 
         let scale_button = MenuButton::builder()
@@ -149,6 +242,8 @@ impl FullscreenDock {
             quality_icon,
             scale_button,
             session_button,
+            mic_button,
+            volume_button,
             restore_button,
             minimize_button,
             disconnect_button,
@@ -179,7 +274,11 @@ impl FullscreenDock {
         window.add_controller(motion);
 
         // Menu popovers lie outside the dock; keep the dock open while one is shown.
-        for button in [&dock.scale_button, &dock.session_button] {
+        for button in [
+            &dock.scale_button,
+            &dock.session_button,
+            &dock.volume_button,
+        ] {
             let weak = Rc::downgrade(&dock);
             button.connect_active_notify(move |button| {
                 if let Some(dock) = weak.upgrade() {
@@ -254,6 +353,7 @@ impl FullscreenDock {
             || self.hide_timer.borrow().is_some()
             || self.scale_button.is_active()
             || self.session_button.is_active()
+            || self.volume_button.is_active()
         {
             return;
         }

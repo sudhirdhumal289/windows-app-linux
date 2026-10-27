@@ -3,6 +3,7 @@
 //! Each supported OS provides the same small API; frontends call these functions
 //! instead of probing the system themselves.
 
+pub mod audio;
 pub mod hooks;
 pub mod secrets;
 

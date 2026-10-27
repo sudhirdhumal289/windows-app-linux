@@ -279,6 +279,27 @@ impl Session {
             },
         );
         full_screen.setToolTip(Some(&ns("Enter or exit full screen (⌃⌘F)")));
+        let mic_muted = crate::platform::audio::is_mic_muted();
+        let mic = toolbar::button_item(
+            mtm,
+            "mic",
+            if mic_muted { "Unmute Mic" } else { "Mute Mic" },
+            if mic_muted {
+                "mic.slash.fill"
+            } else {
+                "mic.fill"
+            },
+            move || {
+                let _ = crate::platform::audio::toggle_mic_muted();
+            },
+        );
+        mic.setToolTip(Some(&ns("Toggle microphone mute/unmute")));
+
+        let volume_menu = self.volume_menu();
+        let volume =
+            toolbar::menu_item(mtm, "volume", "Volume", "speaker.wave.3.fill", &volume_menu);
+        volume.setToolTip(Some(&ns("Adjust session output volume")));
+
         let keys = toolbar::menu_item(mtm, "keys", "Keys", "keyboard", &self.keys_menu());
         keys.setToolTip(Some(&ns("Send keys and other actions")));
         let quality = toolbar::view_item(mtm, "quality", "Connection", &self.quality);
@@ -304,10 +325,33 @@ impl Session {
             items.push(Retained::into_super(scale.clone()));
             *self.scale_item.borrow_mut() = Some(scale);
         }
+        order.push(ns("mic"));
+        order.push(ns("volume"));
         order.push(ns("keys"));
         order.push(ns("fullscreen"));
+        items.push(mic);
+        items.push(Retained::into_super(volume));
         items.push(Retained::into_super(keys));
         toolbar::install(&self.window, "SessionToolbar", items, order);
+    }
+
+    fn volume_menu(self: &Rc<Self>) -> Retained<NSMenu> {
+        let mtm = self.window.mtm();
+        let menu = util::menu(mtm, "Volume");
+        menu.addItem(&util::caption_item(mtm, "Session Volume"));
+        let levels = [
+            (100, "100%"),
+            (75, "75%"),
+            (50, "50%"),
+            (25, "25%"),
+            (0, "Mute (0%)"),
+        ];
+        for (vol, label) in levels {
+            menu.addItem(&util::menu_item(mtm, label, "", move || {
+                crate::platform::audio::set_volume(vol);
+            }));
+        }
+        menu
     }
 
     fn keys_menu(self: &Rc<Self>) -> Retained<NSMenu> {

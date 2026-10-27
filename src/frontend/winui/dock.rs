@@ -1,17 +1,8 @@
-//! Fullscreen connection bar (dock) for Windows session windows.
+//! Connection bar / top dock shown over a fullscreen session window on Windows (WinUI/Win32).
 //!
-//! Provides an auto-hiding floating connection bar at the top of the screen when in fullscreen mode,
-//! mirroring the Linux FullscreenDock.
-//! - Collapsed by default upon entering fullscreen, peeking a 6px sliver with a blue horizontal accent bar at the bottom.
-//! - Slides down when the pointer reaches the top sliver / edge.
-//! - Auto-hides 600ms after the pointer moves away into the remote desktop.
-//! - Provides:
-//!   - Session host title and live connection indicator
-//!   - Display Scale dropdown menu (Scale ▾)
-//!   - Actions / Keys dropdown menu (Actions ▾)
-//!   - Restore / Exit Fullscreen button (🗗)
-//!   - Minimize button (―)
-//!   - Disconnect button (✕)
+//! Replicates the Linux GTK fullscreen dock using native Win32 windowing and GDI:
+//! slides down when the pointer reaches the top sliver, stays open while hovered or
+//! while a menu is open, and slides back up shortly after the pointer leaves.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -38,6 +29,8 @@ const WM_MOUSELEAVE: u32 = 0x02A3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockButton {
+    Mic,
+    Volume,
     Scale,
     Actions,
     Restore,
@@ -98,7 +91,7 @@ pub fn create_dock(parent_hwnd: HWND, session: Rc<RefCell<Session>>) -> HWND {
             WS_POPUP | WS_CLIPSIBLINGS,
             0,
             -100,
-            520,
+            640,
             36,
             Some(parent_hwnd),
             None,
@@ -148,7 +141,7 @@ pub fn update_dock_position(
     }
 
     let scale = dock_dpi_scale(dock_hwnd);
-    let width = (520.0 * scale) as i32;
+    let width = (640.0 * scale) as i32;
     let height = (36.0 * scale) as i32;
     let peek_h = (6.0 * scale).round().max(4.0) as i32;
 
@@ -260,16 +253,28 @@ fn button_rect(btn: DockButton, width: i32, height: i32, scale: f64) -> RECT {
     let top = (4.0 * scale) as i32;
     let bottom = height - (7.0 * scale) as i32;
     match btn {
-        DockButton::Scale => RECT {
-            left: width - (326.0 * scale) as i32,
+        DockButton::Mic => RECT {
+            left: width - (482.0 * scale) as i32,
             top,
-            right: width - (238.0 * scale) as i32,
+            right: width - (416.0 * scale) as i32,
+            bottom,
+        },
+        DockButton::Volume => RECT {
+            left: width - (412.0 * scale) as i32,
+            top,
+            right: width - (324.0 * scale) as i32,
+            bottom,
+        },
+        DockButton::Scale => RECT {
+            left: width - (320.0 * scale) as i32,
+            top,
+            right: width - (234.0 * scale) as i32,
             bottom,
         },
         DockButton::Actions => RECT {
-            left: width - (234.0 * scale) as i32,
+            left: width - (230.0 * scale) as i32,
             top,
-            right: width - (138.0 * scale) as i32,
+            right: width - (134.0 * scale) as i32,
             bottom,
         },
         DockButton::Restore => RECT {
@@ -293,7 +298,9 @@ fn button_rect(btn: DockButton, width: i32, height: i32, scale: f64) -> RECT {
     }
 }
 
-const ALL_BUTTONS: [DockButton; 5] = [
+const ALL_BUTTONS: [DockButton; 7] = [
+    DockButton::Mic,
+    DockButton::Volume,
     DockButton::Scale,
     DockButton::Actions,
     DockButton::Restore,
@@ -439,6 +446,13 @@ fn handle_button_click(hwnd: HWND, btn: DockButton, scale: f64) {
     };
 
     match btn {
+        DockButton::Mic => {
+            let _ = crate::platform::audio::toggle_mic_muted();
+            let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+        }
+        DockButton::Volume => {
+            show_volume_menu(hwnd, parent_hwnd, &session, scale);
+        }
         DockButton::Scale => {
             show_scale_menu(hwnd, parent_hwnd, &session, scale);
         }
@@ -461,14 +475,19 @@ fn handle_button_click(hwnd: HWND, btn: DockButton, scale: f64) {
     }
 }
 
-fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Session>>, scale: f64) {
+fn show_volume_menu(
+    dock_hwnd: HWND,
+    _parent_hwnd: HWND,
+    _session: &Rc<RefCell<Session>>,
+    scale: f64,
+) {
     if let Some(state) = dock_for(dock_hwnd) {
         state.borrow_mut().menu_open = true;
     }
     let mut client = RECT::default();
     let _ = unsafe { GetClientRect(dock_hwnd, &mut client) };
     let r = button_rect(
-        DockButton::Scale,
+        DockButton::Volume,
         client.right - client.left,
         client.bottom - client.top,
         scale,
@@ -477,10 +496,8 @@ fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Sess
         x: r.left,
         y: r.bottom,
     };
-    // SAFETY: ClientToScreen coordinates.
     let _ = unsafe { ClientToScreen(dock_hwnd, &mut pt) };
 
-    // SAFETY: Building Win32 popup menu for display scale.
     unsafe {
         let menu = match CreatePopupMenu() {
             Ok(m) => m,
@@ -491,25 +508,22 @@ fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Sess
                 return;
             }
         };
-        let current_scale = session.borrow().controller.scale();
-        let entries = scale_menu(current_scale);
-        for (i, entry) in entries.iter().enumerate() {
-            let flags = if entry.checked {
-                MF_STRING | MF_CHECKED
-            } else {
-                MF_STRING
-            };
-            let label = HSTRING::from(entry.label.as_str());
-            let _ = AppendMenuW(menu, flags, 1000 + i, &label);
-        }
 
-        let custom_id = 1000 + entries.len();
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING,
-            custom_id,
-            &HSTRING::from("Custom Scale..."),
-        );
+        let current_vol = crate::platform::audio::get_volume();
+        let levels = [
+            (100, "100%"),
+            (75, "75%"),
+            (50, "50%"),
+            (25, "25%"),
+            (0, "Mute (0%)"),
+        ];
+        for (vol, label) in levels {
+            let mut flags = MF_STRING;
+            if current_vol == vol || (vol > 0 && current_vol.abs_diff(vol) < 13) {
+                flags |= MF_CHECKED;
+            }
+            let _ = AppendMenuW(menu, flags, 3000 + vol as usize, &HSTRING::from(label));
+        }
 
         let chosen = TrackPopupMenu(
             menu,
@@ -528,19 +542,81 @@ fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Sess
         }
 
         let chosen = chosen.0 as usize;
-        if (1000..custom_id).contains(&chosen) {
-            let index = chosen - 1000;
-            if let Some(entry) = entries.get(index) {
-                session.borrow_mut().controller.set_scale(entry.choice);
-                session_window::resize_now(parent_hwnd, session);
+        if (3000..=3100).contains(&chosen) {
+            let vol = (chosen - 3000) as u32;
+            crate::platform::audio::set_volume(vol);
+            let _ = InvalidateRect(Some(dock_hwnd), None, false);
+        }
+    }
+}
+
+fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Session>>, scale: f64) {
+    if let Some(state) = dock_for(dock_hwnd) {
+        state.borrow_mut().menu_open = true;
+    }
+    let mut client = RECT::default();
+    let _ = unsafe { GetClientRect(dock_hwnd, &mut client) };
+    let r = button_rect(
+        DockButton::Scale,
+        client.right - client.left,
+        client.bottom - client.top,
+        scale,
+    );
+    let mut pt = POINT {
+        x: r.left,
+        y: r.bottom,
+    };
+    let _ = unsafe { ClientToScreen(dock_hwnd, &mut pt) };
+
+    // SAFETY: Building Win32 popup menu for display scales.
+    unsafe {
+        let menu = match CreatePopupMenu() {
+            Ok(m) => m,
+            Err(_) => {
+                if let Some(state) = dock_for(dock_hwnd) {
+                    state.borrow_mut().menu_open = false;
+                }
+                return;
             }
-        } else if chosen == custom_id {
-            // Custom scale.
-            let dpi_scale = session_window::dpi_scale(parent_hwnd);
-            let current = session.borrow().controller.scale().resolve(dpi_scale);
-            let id = session.borrow().id;
-            let name = session.borrow().name.clone();
-            (session.borrow().notify)(session_window::Notice::CustomScale { id, name, current });
+        };
+
+        let current_scale = session.borrow().controller.scale_choice();
+        let mon_scale = session_window::window_dpi_scale(parent_hwnd);
+        let items = scale_menu(current_scale, mon_scale);
+
+        for (i, item) in items.iter().enumerate() {
+            let mut flags = MF_STRING;
+            if item.is_active {
+                flags |= MF_CHECKED;
+            }
+            let label = HSTRING::from(&item.label);
+            let _ = AppendMenuW(menu, flags, 1000 + i, &label);
+        }
+
+        let chosen = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+            pt.x,
+            pt.y,
+            None,
+            dock_hwnd,
+            None,
+        );
+        let _ = DestroyMenu(menu);
+
+        if let Some(state) = dock_for(dock_hwnd) {
+            state.borrow_mut().menu_open = false;
+            let _ = SetTimer(Some(dock_hwnd), TIMER_HIDE, HIDE_DELAY_MS, None);
+        }
+
+        let chosen = chosen.0 as usize;
+        if (1000..1000 + items.len()).contains(&chosen) {
+            let item = &items[chosen - 1000];
+            session
+                .borrow_mut()
+                .controller
+                .set_scale_choice(item.choice);
+            session_window::rebuild_menu(parent_hwnd, session);
         }
     }
 }
@@ -707,17 +783,48 @@ fn paint_dock(hwnd: HWND) {
             if is_hovered {
                 let hover_color = if btn == DockButton::Disconnect {
                     COLORREF(0x1C2BC4) // Soft red BGR
+                } else if btn == DockButton::Mic && crate::platform::audio::is_mic_muted() {
+                    COLORREF(0x1C2BC4) // Muted mic red BGR
                 } else {
                     COLORREF(0x383838) // Hover gray
                 };
                 let hover_brush = CreateSolidBrush(hover_color);
                 let _ = FillRect(mem_dc, &r, hover_brush);
                 let _ = DeleteObject(hover_brush.into());
+            } else if btn == DockButton::Mic && crate::platform::audio::is_mic_muted() {
+                // Non-hovered muted mic subtle warning tint
+                let warning_brush = CreateSolidBrush(COLORREF(0x1F2255));
+                let _ = FillRect(mem_dc, &r, warning_brush);
+                let _ = DeleteObject(warning_brush.into());
             }
 
             let _ = SetTextColor(mem_dc, COLORREF(0xFFFFFF));
             let mut draw_r = r;
             match btn {
+                DockButton::Mic => {
+                    let muted = crate::platform::audio::is_mic_muted();
+                    let text = if muted { "🎤 Off" } else { "🎤 On" };
+                    let mut text_w: Vec<u16> =
+                        text.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = DrawTextW(
+                        mem_dc,
+                        &mut text_w,
+                        &mut draw_r,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+                    );
+                }
+                DockButton::Volume => {
+                    let vol = crate::platform::audio::get_volume();
+                    let text = format!("🔊 {vol}% ▾");
+                    let mut text_w: Vec<u16> =
+                        text.encode_utf16().chain(std::iter::once(0)).collect();
+                    let _ = DrawTextW(
+                        mem_dc,
+                        &mut text_w,
+                        &mut draw_r,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+                    );
+                }
                 DockButton::Scale => {
                     let mut text_w: Vec<u16> =
                         "Scale ▾".encode_utf16().chain(std::iter::once(0)).collect();
@@ -777,7 +884,7 @@ fn paint_dock(hwnd: HWND) {
         let title_r = RECT {
             left: (16.0 * scale) as i32,
             top: (4.0 * scale) as i32,
-            right: width - (338.0 * scale) as i32,
+            right: width - (490.0 * scale) as i32,
             bottom: height - (7.0 * scale) as i32,
         };
         let title_str = format!("● {name}");
@@ -788,38 +895,18 @@ fn paint_dock(hwnd: HWND) {
             mem_dc,
             &mut title_w,
             &mut draw_title,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
         );
 
-        // Separators.
-        let sep_brush = CreateSolidBrush(COLORREF(0x404040));
-        let sep_top = (7.0 * scale) as i32;
-        let sep_bottom = height - (10.0 * scale) as i32;
-        let sep1 = RECT {
-            left: width - (332.0 * scale) as i32,
-            top: sep_top,
-            right: width - (331.0 * scale) as i32,
-            bottom: sep_bottom,
-        };
-        let sep2 = RECT {
-            left: width - (132.0 * scale) as i32,
-            top: sep_top,
-            right: width - (131.0 * scale) as i32,
-            bottom: sep_bottom,
-        };
-        let _ = FillRect(mem_dc, &sep1, sep_brush);
-        let _ = FillRect(mem_dc, &sep2, sep_brush);
-        let _ = DeleteObject(sep_brush.into());
-
-        // Blit back buffer to screen.
+        // Blit to screen.
         let _ = BitBlt(hdc, 0, 0, width, height, Some(mem_dc), 0, 0, SRCCOPY);
 
-        // Clean up GDI objects.
         let _ = SelectObject(mem_dc, old_font);
         let _ = DeleteObject(font.into());
         let _ = SelectObject(mem_dc, old_bm);
         let _ = DeleteObject(mem_bm.into());
         let _ = DeleteDC(mem_dc);
-        let _ = EndPaint(hwnd, &ps);
     }
+
+    let _ = unsafe { EndPaint(hwnd, &ps) };
 }
