@@ -290,10 +290,7 @@ impl Session {
                 "mic.fill"
             },
             move || {
-                let muted = crate::platform::audio::toggle_mic_muted();
-                if !muted {
-                    crate::platform::audio::ensure_mic_optimal_gain();
-                }
+                let _muted = crate::platform::audio::toggle_mic_muted();
             },
         );
         mic.setToolTip(Some(&ns("Toggle microphone mute/unmute")));
@@ -343,7 +340,7 @@ impl Session {
         let menu = util::menu(mtm, "Audio");
         menu.addItem(&util::caption_item(mtm, "Speaker Volume"));
         let levels = [
-            (100, "100%"),
+            (100, "100% (Default)"),
             (75, "75%"),
             (50, "50%"),
             (25, "25%"),
@@ -355,12 +352,12 @@ impl Session {
             }));
         }
         menu.addItem(&NSMenuItem::separatorItem(mtm));
-        menu.addItem(&util::caption_item(mtm, "Microphone Gain"));
+        menu.addItem(&util::caption_item(mtm, "Microphone Volume"));
         let mic_levels = [
-            (125, "Boosted (125%)"),
-            (100, "100% (Optimal)"),
+            (100, "100%"),
             (75, "75%"),
-            (50, "50%"),
+            (50, "50% (Default)"),
+            (25, "25%"),
         ];
         for (gain, label) in mic_levels {
             menu.addItem(&util::menu_item(mtm, label, "", move || {

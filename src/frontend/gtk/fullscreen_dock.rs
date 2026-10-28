@@ -110,7 +110,6 @@ impl FullscreenDock {
                 btn.set_tooltip_text(Some("Unmute Microphone (Currently Muted)"));
                 btn.add_css_class("warning");
             } else {
-                crate::platform::audio::ensure_mic_optimal_gain();
                 btn.set_icon_name("audio-input-microphone-symbolic");
                 btn.set_tooltip_text(Some("Mute Microphone"));
                 btn.remove_css_class("warning");
@@ -138,11 +137,11 @@ impl FullscreenDock {
 
         vol_box.append(&Separator::new(Orientation::Horizontal));
 
-        let mic_label = Label::new(Some(&format!("Microphone Gain: {current_mic_vol}%")));
+        let mic_label = Label::new(Some(&format!("Microphone Volume: {current_mic_vol}%")));
         mic_label.add_css_class("heading");
         vol_box.append(&mic_label);
 
-        let mic_scale = Scale::with_range(Orientation::Horizontal, 0.0, 150.0, 5.0);
+        let mic_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 5.0);
         mic_scale.set_value(f64::from(current_mic_vol));
         mic_scale.set_width_request(160);
         vol_box.append(&mic_scale);
@@ -185,10 +184,10 @@ impl FullscreenDock {
 
         let mic_label_weak = mic_label.downgrade();
         mic_scale.connect_value_changed(move |scale| {
-            let gain = scale.value().round().clamp(0.0, 150.0) as u32;
-            crate::platform::audio::set_mic_volume(gain);
+            let vol = scale.value().round().clamp(0.0, 100.0) as u32;
+            crate::platform::audio::set_mic_volume(vol);
             if let Some(lbl) = mic_label_weak.upgrade() {
-                lbl.set_label(&format!("Microphone Gain: {gain}%"));
+                lbl.set_label(&format!("Microphone Volume: {vol}%"));
             }
         });
         dock_box.append(&volume_button);

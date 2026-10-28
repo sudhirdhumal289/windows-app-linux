@@ -1175,7 +1175,8 @@ impl NativeRdpBridge {
 
     /// Starts connecting on a FreeRDP thread. Progress arrives as [`BridgeEvent::Status`].
     pub fn start(&self) -> Result<()> {
-        crate::platform::audio::ensure_mic_optimal_gain();
+        #[cfg(not(test))]
+        crate::platform::audio::ensure_audio_defaults();
         // SAFETY (all methods): ctx is a live context from freerdp_bridge_create.
         if unsafe { ffi::freerdp_bridge_start(self.ctx()) } {
             Ok(())

@@ -2,15 +2,22 @@
 //!
 //! Provides a unified, toolkit-independent interface for querying and controlling
 //! host audio devices (default microphone and speaker/output sink) across Linux
-//! (PipeWire/WirePlumber, PulseAudio, and ALSA), macOS, and Windows.
+//! (PipeWire/WirePlumber, PulseAudio), macOS, and Windows.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Once;
 
+/// Default clean microphone volume (50%) to prevent analog pre-amp distortion
+/// and digital clipping on host audio systems.
+pub const DEFAULT_MIC_VOLUME: u32 = 50;
+
+/// Default speaker / output volume (100%).
+pub const DEFAULT_SPEAKER_VOLUME: u32 = 100;
+
 static INIT: Once = Once::new();
 static MIC_MUTED: AtomicBool = AtomicBool::new(false);
-static MIC_VOLUME_LEVEL: AtomicU32 = AtomicU32::new(100);
-static VOLUME_LEVEL: AtomicU32 = AtomicU32::new(100);
+static MIC_VOLUME_LEVEL: AtomicU32 = AtomicU32::new(DEFAULT_MIC_VOLUME);
+static VOLUME_LEVEL: AtomicU32 = AtomicU32::new(DEFAULT_SPEAKER_VOLUME);
 
 fn ensure_initialized() {
     INIT.call_once(|| {
@@ -18,7 +25,7 @@ fn ensure_initialized() {
             MIC_MUTED.store(muted, Ordering::Relaxed);
         }
         if let Some(mic_vol) = os::query_mic_volume() {
-            MIC_VOLUME_LEVEL.store(mic_vol.clamp(0, 150), Ordering::Relaxed);
+            MIC_VOLUME_LEVEL.store(mic_vol.min(100), Ordering::Relaxed);
         }
         if let Some(vol) = os::query_volume() {
             VOLUME_LEVEL.store(vol.min(100), Ordering::Relaxed);
@@ -39,10 +46,9 @@ pub fn set_mic_muted(muted: bool) -> bool {
     MIC_MUTED.store(muted, Ordering::Relaxed);
     os::set_mic_muted(muted);
     if !muted {
-        // When unmuting, ensure microphone volume is at least 100% to prevent low recording volume
         let current = MIC_VOLUME_LEVEL.load(Ordering::Relaxed);
-        if current < 80 {
-            set_mic_volume(100);
+        if current == 0 {
+            set_mic_volume(DEFAULT_MIC_VOLUME);
         }
     }
     muted
@@ -54,35 +60,45 @@ pub fn toggle_mic_muted() -> bool {
     set_mic_muted(new_state)
 }
 
-/// Gets the session microphone input gain / volume (0 to 150, standard 100).
+/// Gets the session microphone input volume (0 to 100).
 #[must_use]
 pub fn get_mic_volume() -> u32 {
     ensure_initialized();
     MIC_VOLUME_LEVEL.load(Ordering::Relaxed)
 }
 
-/// Sets the session microphone input gain / volume (0 to 150). Returns the applied volume level.
+/// Sets the session microphone input volume (0 to 100). Returns the applied volume level.
 pub fn set_mic_volume(level: u32) -> u32 {
     ensure_initialized();
-    let clamped = level.clamp(0, 150);
+    let clamped = level.min(100);
     MIC_VOLUME_LEVEL.store(clamped, Ordering::Relaxed);
     os::set_mic_volume(clamped);
     clamped
 }
 
-/// Ensures that the default microphone is unmuted and its recording volume is at an
-/// optimal level (at least 100%), preventing inaudible or low-volume recordings in remote sessions.
-pub fn ensure_mic_optimal_gain() -> u32 {
+/// Ensures that the default microphone is unmuted and sets the default recording volume
+/// to 50% to prevent analog pre-amp distortion and audio clipping.
+pub fn ensure_mic_default_volume() -> u32 {
     ensure_initialized();
     if is_mic_muted() {
         set_mic_muted(false);
     }
-    let current = get_mic_volume();
-    if current < 80 {
-        set_mic_volume(100)
-    } else {
-        current
-    }
+    set_mic_volume(DEFAULT_MIC_VOLUME);
+    DEFAULT_MIC_VOLUME
+}
+
+/// Ensures that the default speaker volume is set to 100%.
+pub fn ensure_speaker_default_volume() -> u32 {
+    ensure_initialized();
+    set_volume(DEFAULT_SPEAKER_VOLUME);
+    DEFAULT_SPEAKER_VOLUME
+}
+
+/// Ensures default session audio levels: microphone unmuted at 50% volume,
+/// and speaker output at 100% volume.
+pub fn ensure_audio_defaults() {
+    ensure_mic_default_volume();
+    ensure_speaker_default_volume();
 }
 
 /// Gets the session output volume (0 to 100).
@@ -102,7 +118,7 @@ pub fn set_volume(level: u32) -> u32 {
 }
 
 // -----------------------------------------------------------------------------
-// Linux implementation (PipeWire / WirePlumber `wpctl`, PulseAudio `pactl`, ALSA `amixer`)
+// Linux implementation (PipeWire / WirePlumber `wpctl` and PulseAudio `pactl`)
 // -----------------------------------------------------------------------------
 #[cfg(target_os = "linux")]
 mod os {
@@ -155,7 +171,7 @@ mod os {
                 // format: "Volume: 0.54" or "Volume: 1.00 [MUTED]"
                 if let Some(vol_str) = text.split_whitespace().nth(1) {
                     if let Ok(val) = vol_str.parse::<f64>() {
-                        return Some((val * 100.0).round().clamp(0.0, 150.0) as u32);
+                        return Some((val * 100.0).round().clamp(0.0, 100.0) as u32);
                     }
                 }
             }
@@ -171,21 +187,7 @@ mod os {
                 for part in text.split('/') {
                     let trimmed = part.trim().trim_end_matches('%');
                     if let Ok(v) = trimmed.parse::<u32>() {
-                        return Some(v.min(150));
-                    }
-                }
-            }
-        }
-
-        // Fallback to ALSA (amixer)
-        if let Ok(out) = Command::new("amixer").args(["sget", "Capture"]).output() {
-            if out.status.success() {
-                let text = String::from_utf8_lossy(&out.stdout);
-                if let Some(start) = text.find('[') {
-                    if let Some(end) = text[start..].find("%]") {
-                        if let Ok(v) = text[start + 1..start + end].trim().parse::<u32>() {
-                            return Some(v.min(100));
-                        }
+                        return Some(v.min(100));
                     }
                 }
             }
@@ -195,7 +197,7 @@ mod os {
     }
 
     pub fn set_mic_volume(level: u32) {
-        let clamped = level.clamp(0, 150);
+        let clamped = level.min(100);
         let float_val = format!("{:.2}", f64::from(clamped) / 100.0);
         let pct = format!("{clamped}%");
 
@@ -204,9 +206,6 @@ mod os {
             .output();
         let _ = Command::new("pactl")
             .args(["set-source-volume", "@DEFAULT_SOURCE@", &pct])
-            .output();
-        let _ = Command::new("amixer")
-            .args(["sset", "Capture", &pct])
             .output();
     }
 
@@ -283,7 +282,7 @@ mod os {
     }
 
     pub fn set_mic_muted(muted: bool) {
-        let val = if muted { "0" } else { "100" };
+        let val = if muted { "0" } else { "50" };
         let script = format!("set volume input volume {val}");
         let _ = Command::new("osascript").args(["-e", &script]).output();
     }
@@ -468,8 +467,8 @@ mod tests {
         assert_eq!(get_volume(), 50);
 
         // Mic volume clamping
-        assert_eq!(set_mic_volume(200), 150);
-        assert_eq!(get_mic_volume(), 150);
+        assert_eq!(set_mic_volume(150), 100);
+        assert_eq!(get_mic_volume(), 100);
         assert_eq!(set_mic_volume(50), 50);
         assert_eq!(get_mic_volume(), 50);
 
@@ -480,9 +479,13 @@ mod tests {
         let restored = toggle_mic_muted();
         assert_eq!(restored, initial);
 
-        // Optimal gain ensure
-        let optimal = ensure_mic_optimal_gain();
-        assert!(optimal >= 80);
+        // Default mic volume ensure (50%)
+        assert_eq!(ensure_mic_default_volume(), 50);
+        assert_eq!(get_mic_volume(), 50);
         assert!(!is_mic_muted());
+
+        // Default speaker volume ensure (100%)
+        assert_eq!(ensure_speaker_default_volume(), 100);
+        assert_eq!(get_volume(), 100);
     }
 }

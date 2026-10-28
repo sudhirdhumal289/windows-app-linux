@@ -437,8 +437,8 @@ fn use_graphics_pipeline(target: &Target<'_>, opts: &SessionOptions) -> bool {
 /// `format:1` enforces uncompressed raw 16-bit linear PCM (`WAVE_FORMAT_PCM`) across all
 /// platforms (Linux, macOS, and Windows) instead of lossy low-bitrate compression codecs
 /// (e.g. GSM 6.10, ADPCM), which cause severely muffled, quiet, or clipped voice recording.
-/// Dynamic sample-rate negotiation allows native 48 kHz (matching PipeWire and Windows Audio)
-/// and 44.1 kHz capture without resampling attenuation or clock drift.
+/// Sample rate (e.g. 48 kHz / 44.1 kHz) and channel count (mono / stereo) are dynamically
+/// negotiated with the server to prevent format mismatch rejection.
 fn audio_arg(channel: &str) -> String {
     if channel == "microphone" {
         if cfg!(target_os = "linux") {
