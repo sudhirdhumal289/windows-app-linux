@@ -370,6 +370,17 @@ impl Session {
         let weak = Rc::downgrade(self);
         menu.addItem(&util::menu_item(
             mtm,
+            "Performance HUD (Ctrl+Shift+D)",
+            "",
+            move || {
+                if let Some(this) = weak.upgrade() {
+                    this.toggle_hud();
+                }
+            },
+        ));
+        let weak = Rc::downgrade(self);
+        menu.addItem(&util::menu_item(
+            mtm,
             "Type Clipboard Text",
             "",
             move || {
@@ -511,6 +522,12 @@ impl Session {
         });
         if let Some(Err(message)) = result {
             self.notice(&message);
+        }
+    }
+
+    fn toggle_hud(&self) {
+        if let Some(text) = self.with_controller(|c| c.diagnostics().format_hud()) {
+            self.notice(&format!("Diagnostics:\n{text}"));
         }
     }
 

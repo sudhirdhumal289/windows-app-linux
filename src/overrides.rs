@@ -91,6 +91,15 @@ pub struct ConnectionOverrides {
     /// Shell command started after the session ends.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub post_command: String,
+    /// Starred connection for quick one-click access.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_favorite: bool,
+    /// Custom tags for filtering (e.g. "Production", "Development", "Lab").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Folder heading or category (e.g. "Production", "Development", "Lab").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 impl ConnectionOverrides {
@@ -162,7 +171,7 @@ impl OverrideStore {
         Self { path: path.into() }
     }
 
-    fn load_all(&self) -> BTreeMap<String, ConnectionOverrides> {
+    pub fn load_all(&self) -> BTreeMap<String, ConnectionOverrides> {
         std::fs::read(&self.path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -196,6 +205,39 @@ impl OverrideStore {
 
     pub fn remove(&self, target: &LaunchTarget) -> std::io::Result<()> {
         self.set(target, ConnectionOverrides::default())
+    }
+
+    #[must_use]
+    pub fn is_favorite(&self, target: &LaunchTarget) -> bool {
+        self.get(target).is_favorite
+    }
+
+    pub fn set_favorite(&self, target: &LaunchTarget, favorite: bool) -> std::io::Result<()> {
+        let mut ov = self.get(target);
+        ov.is_favorite = favorite;
+        self.set(target, ov)
+    }
+
+    #[must_use]
+    pub fn tags(&self, target: &LaunchTarget) -> Vec<String> {
+        self.get(target).tags
+    }
+
+    pub fn set_tags(&self, target: &LaunchTarget, tags: Vec<String>) -> std::io::Result<()> {
+        let mut ov = self.get(target);
+        ov.tags = tags;
+        self.set(target, ov)
+    }
+
+    #[must_use]
+    pub fn folder(&self, target: &LaunchTarget) -> Option<String> {
+        self.get(target).folder
+    }
+
+    pub fn set_folder(&self, target: &LaunchTarget, folder: Option<String>) -> std::io::Result<()> {
+        let mut ov = self.get(target);
+        ov.folder = folder;
+        self.set(target, ov)
     }
 }
 
@@ -261,5 +303,27 @@ mod tests {
         store.remove(&target).unwrap();
         assert!(store.get(&target).is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn overrides_favorites_folders_tags() {
+        let dir = std::env::temp_dir().join(format!("wal-overrides-{}", uuid::Uuid::new_v4()));
+        let store = OverrideStore::at(dir.join("connection-settings.json"));
+        let target = LaunchTarget::CloudPc("pc-123".into());
+
+        assert!(!store.is_favorite(&target));
+        assert!(store.tags(&target).is_empty());
+        assert!(store.folder(&target).is_none());
+
+        store.set_favorite(&target, true).unwrap();
+        store
+            .set_tags(&target, vec!["Dev".into(), "Test".into()])
+            .unwrap();
+        store
+            .set_folder(&target, Some("Workspaces".into()))
+            .unwrap();
+
+        assert!(store.is_favorite(&target));
+        assert_eq!(store.tags(&target), vec!["Dev", "Test"]);
+        assert_eq!(store.folder(&target).as_deref(), Some("Workspaces"));
     }
 }

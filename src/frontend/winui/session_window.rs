@@ -127,6 +127,7 @@ pub(crate) struct Session {
     pub(crate) clipboard_sequence: u32,
     pub(crate) note: Option<String>,
     pub(crate) target: Option<crate::launcher::LaunchTarget>,
+    pub(crate) show_hud: bool,
 }
 
 thread_local! {
@@ -288,6 +289,7 @@ pub fn open(launch: Launch, prepared: PreparedSession, notify: Notifier) -> Resu
         clipboard_sequence: 0,
         note: None,
         target,
+        show_hud: false,
     }));
     let dock = super::dock::create_dock(hwnd, Rc::clone(&session));
     session.borrow().dock_hwnd.set(Some(dock));
@@ -727,6 +729,12 @@ fn paint(hwnd: HWND, session: &Rc<RefCell<Session>>) {
             _ => false,
         }
     };
+    let show_hud = session.borrow().show_hud;
+    if show_hud {
+        let text = session.borrow().controller.diagnostics().format_hud();
+        paint_hud(target_dc, width, &text);
+    }
+
     if !drawn {
         let s = session.borrow();
         let (heading, detail) = match s.controller.state() {
@@ -758,6 +766,35 @@ fn paint(hwnd: HWND, session: &Rc<RefCell<Session>>) {
 
     // SAFETY: matches BeginPaint above.
     let _ = unsafe { EndPaint(hwnd, &ps) };
+}
+
+fn paint_hud(hdc: HDC, width: i32, text: &str) {
+    let hud_w = 260;
+    let hud_h = 160;
+    let margin = 16;
+    let rect = RECT {
+        left: width - hud_w - margin,
+        top: margin,
+        right: width - margin,
+        bottom: margin + hud_h,
+    };
+    // SAFETY: standard GDI fill and text drawing into target_dc.
+    unsafe {
+        let brush = CreateSolidBrush(rgb(24, 24, 27));
+        FillRect(hdc, &rect, brush);
+        let _ = DeleteObject(brush.into());
+
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, rgb(240, 240, 240));
+        let mut wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut text_rect = RECT {
+            left: rect.left + 8,
+            top: rect.top + 8,
+            right: rect.right - 8,
+            bottom: rect.bottom - 8,
+        };
+        DrawTextW(hdc, &mut wide, &mut text_rect, DT_NOPREFIX);
+    }
 }
 
 fn paint_frame(hdc: HDC, width: i32, height: i32, frame: &crate::rdp::Frame) -> bool {
@@ -938,6 +975,20 @@ fn key(
         return None;
     }
     let down = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN);
+    if down
+        && key_down(VK_CONTROL)
+        && key_down(windows::Win32::UI::Input::KeyboardAndMouse::VK_SHIFT)
+    {
+        let vk = wparam.0 as u16;
+        if vk == b'D' as u16 || vk == b'd' as u16 {
+            let mut s = session.borrow_mut();
+            s.controller.release_input();
+            s.show_hud = !s.show_hud;
+            drop(s);
+            unsafe { InvalidateRect(hwnd, None, false) };
+            return Some(LRESULT(0));
+        }
+    }
     if down && key_down(VK_CONTROL) && key_down(VK_MENU) {
         let vk = wparam.0 as u16;
         if vk == VK_RETURN.0 || vk == VK_HOME.0 {

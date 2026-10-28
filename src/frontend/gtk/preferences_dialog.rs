@@ -2,7 +2,7 @@
 //! Display scale is chosen per session from the session window.
 
 use super::gnome_shell::{self, HelperState};
-use crate::config::{AppConfig, AuthProfile, SharedFolder};
+use crate::config::{AppConfig, AuthProfile, CloudEnvironment, SharedFolder};
 use crate::platform;
 use crate::session::{GraphicsMode, Quality};
 use adw::prelude::*;
@@ -53,12 +53,23 @@ impl PreferencesDialog {
         // Section 1: Authentication & Identity Profile
         let profile_group = adw::PreferencesGroup::builder()
             .title("Identity &amp; Authentication")
-            .description("Select the platform identity profile used during Microsoft sign-in.")
+            .description("Select the platform identity profile and Microsoft cloud environment.")
             .build();
         let selected_profile = config.auth_profile().index();
         let profile_labels: Vec<&str> = AuthProfile::ALL.iter().map(|p| p.label()).collect();
         let profile_row = Self::combo_row("Sign-in Profile", &profile_labels, selected_profile);
         profile_group.add(&profile_row);
+
+        let env_labels: Vec<&str> = CloudEnvironment::ALL.iter().map(|e| e.label()).collect();
+        let selected_env = CloudEnvironment::ALL
+            .iter()
+            .position(|e| *e == config.cloud_environment)
+            .unwrap_or(0) as u32;
+        let env_row = Self::combo_row("Cloud Environment", &env_labels, selected_env);
+        env_row.set_subtitle(
+            "Commercial (Global), US Government (GCC High / DoD), or China (21Vianet)",
+        );
+        profile_group.add(&env_row);
         page.add(&profile_group);
 
         // Display
@@ -270,6 +281,8 @@ impl PreferencesDialog {
             let usb = Rc::clone(&usb_selection);
             let init_usb = init_usb.clone();
             let p_row = profile_row.clone();
+            let e_row = env_row.clone();
+            let init_env = selected_env;
             let cl = clipboard_row.clone();
             let a = audio_row.clone();
             let m = mic_row.clone();
@@ -282,6 +295,7 @@ impl PreferencesDialog {
             let ws = workspace_row.clone();
             Rc::new(move || {
                 let dirty = p_row.selected() != selected_profile
+                    || e_row.selected() != init_env
                     || cl.is_active() != init_clipboard
                     || a.is_active() != init_audio
                     || m.is_active() != init_mic
@@ -305,6 +319,8 @@ impl PreferencesDialog {
 
         let cd = Rc::clone(&check_dirty);
         profile_row.connect_selected_notify(move |_| cd());
+        let cd = Rc::clone(&check_dirty);
+        env_row.connect_selected_notify(move |_| cd());
         let cd = Rc::clone(&check_dirty);
         graphics_row.connect_selected_notify(move |_| cd());
         let cd = Rc::clone(&check_dirty);
@@ -410,6 +426,10 @@ impl PreferencesDialog {
         save_btn.connect_clicked(move |_| {
             let mut updated_config = AppConfig::load();
             updated_config.auth_profile_index = profile_row.selected();
+            if let Some(&env) = CloudEnvironment::ALL.get(env_row.selected() as usize) {
+                updated_config.cloud_environment = env;
+                updated_config.data_boundary = env.data_boundary().to_string();
+            }
             updated_config.enable_clipboard = clipboard_row.is_active();
             updated_config.enable_audio = audio_row.is_active();
             updated_config.enable_microphone = mic_row.is_active();

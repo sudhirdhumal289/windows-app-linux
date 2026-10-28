@@ -2,7 +2,7 @@
 
 use crate::auth::AuthManager;
 use crate::config::{
-    CLIENT_VERSION, GRAPH_BASE_URL, GRAPH_DEFAULT_SCOPE, SOURCE_CLIENT, W365_USER_AGENT,
+    CloudEnvironment, CLIENT_VERSION, GRAPH_DEFAULT_SCOPE, SOURCE_CLIENT, W365_USER_AGENT,
 };
 use crate::error::{AppError, Result};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
@@ -17,11 +17,12 @@ pub struct GraphApiClient {
     http: Client,
     auth: Arc<AuthManager>,
     data_boundary: String,
+    environment: CloudEnvironment,
 }
 
 impl GraphApiClient {
     #[must_use]
-    pub fn new(auth: Arc<AuthManager>, data_boundary: &str) -> Self {
+    pub fn new(auth: Arc<AuthManager>, data_boundary: &str, environment: CloudEnvironment) -> Self {
         Self {
             http: Client::builder()
                 .timeout(Duration::from_secs(30))
@@ -29,12 +30,18 @@ impl GraphApiClient {
                 .unwrap_or_default(),
             auth,
             data_boundary: data_boundary.to_string(),
+            environment,
         }
     }
 
     #[must_use]
     pub fn auth(&self) -> &Arc<AuthManager> {
         &self.auth
+    }
+
+    #[must_use]
+    pub fn environment(&self) -> CloudEnvironment {
+        self.environment
     }
 
     /// Shared HTTP connection pool, for requests that use a different token.
@@ -63,16 +70,31 @@ impl GraphApiClient {
         Ok(headers)
     }
 
-    fn url_for(path: &str) -> String {
+    #[must_use]
+    pub fn url_for(&self, path: &str) -> String {
         if path.starts_with("https://") {
             path.to_string()
         } else {
             format!(
                 "{}/{}",
-                GRAPH_BASE_URL.trim_end_matches('/'),
+                self.environment.graph_base_url().trim_end_matches('/'),
                 path.trim_start_matches('/')
             )
         }
+    }
+
+    #[must_use]
+    pub fn is_graph_url(&self, url: &str) -> bool {
+        url::Url::parse(url)
+            .ok()
+            .and_then(|u| {
+                u.host_str().map(|h| {
+                    h.eq_ignore_ascii_case("graph.microsoft.com")
+                        || h.eq_ignore_ascii_case("graph.microsoft.us")
+                        || h.contains("chinacloudapi.cn")
+                })
+            })
+            .unwrap_or(false)
     }
 
     /// Sends an authorized request and returns the response whatever its status.
@@ -82,9 +104,9 @@ impl GraphApiClient {
         path: &str,
         body: Option<serde_json::Value>,
     ) -> Result<Response> {
-        let url = Self::url_for(path);
+        let url = self.url_for(path);
         // The sign-in token is for the Windows 365 service; Graph needs its own audience.
-        let token = if is_graph_url(&url) {
+        let token = if self.is_graph_url(&url) {
             self.auth.token_for_scope(GRAPH_DEFAULT_SCOPE).await?
         } else {
             self.auth.get_valid_token().await?
@@ -131,38 +153,36 @@ impl GraphApiClient {
     }
 }
 
-fn is_graph_url(url: &str) -> bool {
-    url::Url::parse(url)
-        .ok()
-        .and_then(|u| {
-            u.host_str()
-                .map(|h| h.eq_ignore_ascii_case("graph.microsoft.com"))
-        })
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn resolves_relative_and_absolute_urls() {
+        let auth = Arc::new(AuthManager::new(
+            "https://login.microsoftonline.com/common",
+            "dummy-client",
+        ));
+        let client = GraphApiClient::new(auth, "commercial", CloudEnvironment::Commercial);
         assert_eq!(
-            GraphApiClient::url_for("/me/cloudPCs"),
+            client.url_for("/me/cloudPCs"),
             "https://graph.microsoft.com/beta/me/cloudPCs"
         );
         assert_eq!(
-            GraphApiClient::url_for("https://windows365.microsoft.com/u/api"),
+            client.url_for("https://windows365.microsoft.com/u/api"),
             "https://windows365.microsoft.com/u/api"
         );
     }
 
     #[test]
     fn graph_urls_are_detected() {
-        assert!(is_graph_url(&GraphApiClient::url_for("me/cloudPCs")));
-        assert!(!is_graph_url(
-            "https://windows365.microsoft.com/u/api/v1/cloudPCs"
+        let auth = Arc::new(AuthManager::new(
+            "https://login.microsoftonline.com/common",
+            "dummy-client",
         ));
-        assert!(!is_graph_url("https://graph.microsoft.com.evil.example/x"));
+        let client = GraphApiClient::new(auth, "commercial", CloudEnvironment::Commercial);
+        assert!(client.is_graph_url(&client.url_for("me/cloudPCs")));
+        assert!(!client.is_graph_url("https://windows365.microsoft.com/u/api/v1/cloudPCs"));
+        assert!(!client.is_graph_url("https://graph.microsoft.com.evil.example/x"));
     }
 }

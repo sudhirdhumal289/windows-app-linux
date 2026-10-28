@@ -206,7 +206,29 @@ pub fn show(parent: &impl IsA<gtk4::Widget>, target: LaunchTarget, name: &str) {
     error_label.set_visible(false);
     commands.add(&error_label);
 
+    // Tags, Folders & Favorites
+    let org_group = adw::PreferencesGroup::builder()
+        .title("Organization & Tags")
+        .build();
+    let folder_row = adw::EntryRow::builder()
+        .title("Folder / Category (e.g. Production, Lab)")
+        .text(current.folder.as_deref().unwrap_or_default())
+        .build();
+    let tags_row = adw::EntryRow::builder()
+        .title("Tags (comma separated)")
+        .text(current.tags.join(", "))
+        .build();
+    let favorite_row = adw::SwitchRow::builder()
+        .title("Favorite")
+        .subtitle("Star this connection for quick access")
+        .active(current.is_favorite)
+        .build();
+    org_group.add(&folder_row);
+    org_group.add(&tags_row);
+    org_group.add(&favorite_row);
+
     let page = adw::PreferencesPage::new();
+    page.add(&org_group);
     page.add(&display);
     page.add(&devices);
     page.add(&commands);
@@ -248,6 +270,14 @@ pub fn show(parent: &impl IsA<gtk4::Widget>, target: LaunchTarget, name: &str) {
         let mut overrides = ConnectionOverrides {
             resolution,
             graphics_mode: graphics.value(),
+            is_favorite: favorite_row.is_active(),
+            tags: tags_row
+                .text()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect(),
+            folder: Some(folder_row.text().to_string()).filter(|s| !s.is_empty()),
             quality: quality.value(),
             clipboard: clipboard.value(),
             audio: audio.value(),

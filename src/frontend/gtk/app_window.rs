@@ -73,6 +73,7 @@ pub struct AppMainWindow {
     search_entry: SearchEntry,
     recent: RecentStore,
     overrides: OverrideStore,
+    favorites_only: Cell<bool>,
     /// The user chose what happens to the open sessions, so the window may close.
     close_confirmed: Cell<bool>,
 }
@@ -159,6 +160,11 @@ impl AppMainWindow {
             .primary(true)
             .build();
         header.pack_end(&menu_button);
+        let favorites_btn = ToggleButton::builder()
+            .icon_name("starred-symbolic")
+            .tooltip_text("Show Favorites Only")
+            .build();
+        header.pack_end(&favorites_btn);
         let search_btn = ToggleButton::builder()
             .icon_name("system-search-symbolic")
             .tooltip_text("Search or Quick Connect (Ctrl+F)")
@@ -288,7 +294,16 @@ impl AppMainWindow {
             search_entry,
             recent: RecentStore::default(),
             overrides: OverrideStore::default(),
+            favorites_only: Cell::new(false),
             close_confirmed: Cell::new(false),
+        });
+
+        let weak = Rc::downgrade(&app_window);
+        favorites_btn.connect_toggled(move |btn| {
+            if let Some(this) = weak.upgrade() {
+                this.favorites_only.set(btn.is_active());
+                this.refresh_view();
+            }
         });
 
         // Handlers only hold weak references, so the window state is owned here until the
@@ -635,7 +650,7 @@ impl AppMainWindow {
         menu.append_section(None, &quit_section);
 
         let popover = PopoverMenu::from_model(Some(&menu));
-        if let Some(account) = account {
+        if let Some(ref account) = account {
             let account_box = Box::new(Orientation::Vertical, 2);
             account_box.set_margin_start(12);
             account_box.set_margin_end(12);
@@ -658,6 +673,16 @@ impl AppMainWindow {
             popover.add_child(&account_box, "account");
         }
         self.menu_button.set_popover(Some(&popover));
+
+        if let Some(ref acc) = account {
+            self.menu_button.set_icon_name("avatar-default-symbolic");
+            let label = acc.label().unwrap_or("Account");
+            self.menu_button
+                .set_tooltip_text(Some(&format!("Signed in as {label}")));
+        } else {
+            self.menu_button.set_icon_name("open-menu-symbolic");
+            self.menu_button.set_tooltip_text(Some("Main Menu"));
+        }
     }
 
     /// Registers the window actions used by the header and menus.
@@ -975,54 +1000,100 @@ impl AppMainWindow {
 
         let mut cloud_pcs = Vec::new();
         for pc in self.cached_pcs.borrow().iter() {
-            let account = pc.user_principal_name.as_deref().unwrap_or_default();
-            if !filter.matches(&[&pc.display_name, account]) {
+            let target = LaunchTarget::CloudPc(pc.id.clone());
+            let is_fav = self.overrides.is_favorite(&target);
+            if self.favorites_only.get() && !is_fav {
+                continue;
+            }
+            let tags = self.overrides.tags(&target);
+            let folder = self.overrides.folder(&target);
+            let tag_strs: Vec<&str> = tags.iter().map(String::as_str).collect();
+            let mut search_fields = vec![pc.display_name.as_str()];
+            if let Some(account) = pc.user_principal_name.as_deref() {
+                search_fields.push(account);
+            }
+            search_fields.extend(&tag_strs);
+            if let Some(f) = folder.as_deref() {
+                search_fields.push(f);
+            }
+            if !filter.matches(&search_fields) {
                 continue;
             }
             cloud_pcs.push(ConnectionCard::cloud_pc(
                 pc,
                 mode,
                 connecting.contains(&pc.id),
+                is_fav,
                 last_used(LaunchTarget::CloudPc(pc.id.clone())),
                 on_action(),
             ));
         }
         let mut avd = Vec::new();
         for resource in self.avd_resources.borrow().iter() {
-            let folder = resource.folder.as_deref().unwrap_or_default();
-            if !filter.matches(&[&resource.title, &resource.workspace, folder]) {
+            let target = LaunchTarget::Avd(resource.id.clone());
+            let is_fav = self.overrides.is_favorite(&target);
+            if self.favorites_only.get() && !is_fav {
+                continue;
+            }
+            let tags = self.overrides.tags(&target);
+            let folder = self
+                .overrides
+                .folder(&target)
+                .or_else(|| resource.folder.clone());
+            let tag_strs: Vec<&str> = tags.iter().map(String::as_str).collect();
+            let mut search_fields = vec![resource.title.as_str(), resource.workspace.as_str()];
+            search_fields.extend(&tag_strs);
+            if let Some(f) = folder.as_deref() {
+                search_fields.push(f);
+            }
+            if !filter.matches(&search_fields) {
                 continue;
             }
             avd.push(ConnectionCard::avd_resource(
                 resource,
                 mode,
                 connecting.contains(&resource.id),
+                is_fav,
                 last_used(LaunchTarget::Avd(resource.id.clone())),
                 on_action(),
             ));
         }
-        // Grouped connections first, by group, then by name.
         let mut remote_pcs = self.remote_pcs.borrow().clone();
         remote_pcs.sort_by_cached_key(|c| {
             (
-                c.group.is_empty(),
-                c.group.to_lowercase(),
+                c.folder_or_group().is_empty(),
+                c.folder_or_group().to_lowercase(),
                 c.display_name().to_lowercase(),
             )
         });
         let mut remotes = Vec::new();
         for connection in &remote_pcs {
-            if !filter.matches(&[
+            let target = LaunchTarget::RemotePc(connection.id.clone());
+            let is_fav = connection.is_favorite || self.overrides.is_favorite(&target);
+            if self.favorites_only.get() && !is_fav {
+                continue;
+            }
+            let tags = if !connection.tags.is_empty() {
+                connection.tags.clone()
+            } else {
+                self.overrides.tags(&target)
+            };
+            let folder = connection.folder_or_group();
+            let tag_strs: Vec<&str> = tags.iter().map(String::as_str).collect();
+            let mut search_fields = vec![
                 connection.display_name(),
-                &connection.address,
-                &connection.group,
-                &connection.username,
-            ]) {
+                connection.address.as_str(),
+                folder,
+                connection.username.as_str(),
+            ];
+            search_fields.extend(&tag_strs);
+            if !filter.matches(&search_fields) {
                 continue;
             }
             remotes.push(ConnectionCard::remote_pc(
                 connection,
                 mode,
+                is_fav,
                 last_used(LaunchTarget::RemotePc(connection.id.clone())),
                 on_action(),
             ));
@@ -1260,6 +1331,25 @@ impl AppMainWindow {
             }
             CardAction::ToggleAutostart(target, enable) => {
                 self.set_desktop_entry(&target, true, enable);
+            }
+            CardAction::ToggleFavorite(target, fav) => {
+                if let Err(e) = self.overrides.set_favorite(&target, fav) {
+                    log::warn!("Could not update favorite status: {e}");
+                }
+                if let LaunchTarget::RemotePc(id) = &target {
+                    if let Some(mut c) = self
+                        .remote_pcs
+                        .borrow()
+                        .iter()
+                        .find(|c| &c.id == id)
+                        .cloned()
+                    {
+                        c.is_favorite = fav;
+                        self.save_remote_pc(c);
+                    }
+                } else {
+                    self.refresh_view();
+                }
             }
             CardAction::Settings => self.show_preferences(),
             CardAction::ConnectionSettings(target, name) => {

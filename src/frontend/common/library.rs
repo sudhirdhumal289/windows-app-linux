@@ -129,6 +129,7 @@ pub enum ItemAction {
     ConnectAtLogin,
     ConnectionSettings,
     Preferences,
+    ToggleFavorite,
 }
 
 impl ItemAction {
@@ -154,6 +155,7 @@ impl ItemAction {
             Self::ConnectAtLogin => "Connect at Login",
             Self::ConnectionSettings => "Connection Settings…",
             Self::Preferences => "Preferences",
+            Self::ToggleFavorite => "Toggle Favorite",
         }
     }
 
@@ -246,12 +248,14 @@ impl Item {
                 .unwrap_or("Windows")
                 .to_string(),
             Self::Avd(resource) => resource.kind_label().to_string(),
-            Self::Remote(connection) => match (connection.group.as_str(), &connection.remote_app) {
-                ("", None) => "Remote PC".to_string(),
-                ("", Some(_)) => "RemoteApp".to_string(),
-                (group, None) => format!("Remote PC · {group}"),
-                (group, Some(_)) => format!("RemoteApp · {group}"),
-            },
+            Self::Remote(connection) => {
+                match (connection.folder_or_group(), &connection.remote_app) {
+                    ("", None) => "Remote PC".to_string(),
+                    ("", Some(_)) => "RemoteApp".to_string(),
+                    (group, None) => format!("Remote PC · {group}"),
+                    (group, Some(_)) => format!("RemoteApp · {group}"),
+                }
+            }
         }
     }
 
@@ -309,7 +313,12 @@ impl Item {
                 &resource.workspace,
                 resource.folder.as_deref().unwrap_or_default(),
             ],
-            Self::Remote(c) => vec![c.display_name(), &c.address, &c.group, &c.username],
+            Self::Remote(c) => vec![
+                c.display_name(),
+                &c.address,
+                c.folder_or_group(),
+                &c.username,
+            ],
         }
     }
 
@@ -384,6 +393,7 @@ impl Item {
             items.push(action(ItemAction::Remove, true));
         }
         items.push(MenuItem::Separator);
+        items.push(action(ItemAction::ToggleFavorite, true));
         items.push(action(ItemAction::ConnectionSettings, true));
         items.push(action(ItemAction::Preferences, true));
         items
@@ -406,6 +416,9 @@ pub struct CardView {
     /// A connection or action is in progress.
     pub busy: bool,
     pub tooltip: &'static str,
+    pub is_favorite: bool,
+    pub tags: Vec<String>,
+    pub folder: Option<String>,
 }
 
 impl CardView {
@@ -416,6 +429,11 @@ impl CardView {
         if let Some(last_used) = &self.last_used {
             subtitle.push_str(" • ");
             subtitle.push_str(last_used);
+        }
+        if !self.tags.is_empty() {
+            subtitle.push_str(" • [");
+            subtitle.push_str(&self.tags.join(", "));
+            subtitle.push(']');
         }
         if let Some(account) = &self.account {
             subtitle.push('\n');
@@ -476,8 +494,49 @@ impl Library {
         recent: &BTreeMap<String, chrono::DateTime<chrono::Utc>>,
     ) -> Vec<SectionView> {
         let now = chrono::Utc::now();
+        let store = crate::overrides::OverrideStore::default();
+        let all_overrides = store.load_all();
+
         let card = |item: Item| -> Option<CardView> {
-            if !filter.matches(&item.search_fields()) {
+            let target = item.target();
+            let ov = all_overrides.get(&target.to_string());
+            let is_favorite = match &item {
+                Item::Remote(c) => c.is_favorite || ov.is_some_and(|o| o.is_favorite),
+                _ => ov.is_some_and(|o| o.is_favorite),
+            };
+            let tags = match &item {
+                Item::Remote(c) => {
+                    if !c.tags.is_empty() {
+                        c.tags.clone()
+                    } else {
+                        ov.map(|o| o.tags.clone()).unwrap_or_default()
+                    }
+                }
+                _ => ov.map(|o| o.tags.clone()).unwrap_or_default(),
+            };
+            let folder = match &item {
+                Item::Remote(c) => {
+                    let f = c.folder_or_group();
+                    if !f.is_empty() {
+                        Some(f.to_string())
+                    } else {
+                        ov.and_then(|o| o.folder.clone())
+                    }
+                }
+                Item::Avd(r) => ov
+                    .and_then(|o| o.folder.clone())
+                    .or_else(|| r.folder.clone()),
+                Item::CloudPc(_) => ov.and_then(|o| o.folder.clone()),
+            };
+
+            let mut fields = item.search_fields();
+            for t in &tags {
+                fields.push(t.as_str());
+            }
+            if let Some(f) = folder.as_deref() {
+                fields.push(f);
+            }
+            if !filter.matches(&fields) {
                 return None;
             }
             let (detail_prefix, detail) = item.detail();
@@ -494,14 +553,17 @@ impl Library {
                     .map(|when| history::relative_time(*when, now)),
                 busy: busy.contains(item.id()),
                 tooltip: item.connect_tooltip(),
+                is_favorite,
+                tags,
+                folder,
                 item,
             })
         };
         let mut remote_pcs = self.remote_pcs.clone();
         remote_pcs.sort_by_cached_key(|c| {
             (
-                c.group.is_empty(),
-                c.group.to_lowercase(),
+                c.folder_or_group().is_empty(),
+                c.folder_or_group().to_lowercase(),
                 c.display_name().to_lowercase(),
             )
         });
@@ -618,5 +680,32 @@ mod tests {
         let lib = library();
         assert!(lib.find(&LaunchTarget::CloudPc("pc1".into())).is_some());
         assert!(lib.find(&LaunchTarget::Avd("x".into())).is_none());
+    }
+
+    #[test]
+    fn matches_tags_and_folders() {
+        let mut lib = library();
+        let mut tagged = SavedConnection::new("Prod DB", "10.0.1.10", "admin").unwrap();
+        tagged.tags = vec!["production".into(), "database".into()];
+        tagged.folder = Some("Infrastructure".into());
+        tagged.is_favorite = true;
+        lib.remote_pcs.push(tagged);
+
+        let none = HashSet::new();
+        let filter_tag = SearchFilter::new("production");
+        let sections = lib.sections(&filter_tag, &none, &none, &BTreeMap::new());
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].cards[0].title, "Prod DB");
+        assert!(sections[0].cards[0].is_favorite);
+        assert_eq!(
+            sections[0].cards[0].folder.as_deref(),
+            Some("Infrastructure")
+        );
+        assert_eq!(sections[0].cards[0].tags, vec!["production", "database"]);
+
+        let filter_folder = SearchFilter::new("Infrastructure");
+        let sections_folder = lib.sections(&filter_folder, &none, &none, &BTreeMap::new());
+        assert_eq!(sections_folder.len(), 1);
+        assert_eq!(sections_folder[0].cards[0].title, "Prod DB");
     }
 }

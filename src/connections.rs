@@ -144,9 +144,28 @@ pub struct SavedConnection {
     /// The password is kept in the system keyring (never in this file).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub remember_password: bool,
+    /// Starred connection for quick one-click access.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_favorite: bool,
+    /// Custom tags for categorization and filtering (e.g. "Production", "Development", "Lab").
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Folder heading or category (e.g. "Production", "Development", "Lab").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 impl SavedConnection {
+    #[must_use]
+    pub fn folder_or_group(&self) -> &str {
+        if let Some(folder) = &self.folder {
+            if !folder.is_empty() {
+                return folder.as_str();
+            }
+        }
+        &self.group
+    }
+
     /// Creates a connection with a new id after validating `address` and `username`.
     pub fn new(name: &str, address: &str, username: &str) -> Result<Self, AddressError> {
         let mut connection = Self::blank();
@@ -171,6 +190,9 @@ impl SavedConnection {
             certificate: CertificatePolicy::default(),
             auth: AuthMethod::default(),
             remember_password: false,
+            is_favorite: false,
+            tags: Vec::new(),
+            folder: None,
         }
     }
 
@@ -598,5 +620,23 @@ mod tests {
         std::fs::write(store.path(), "not json").unwrap();
         assert!(store.load().is_empty());
         let _ = std::fs::remove_dir_all(dir);
+    }
+    #[test]
+    fn connection_favorites_folders_tags() {
+        let mut c = SavedConnection::new("Test", "10.0.0.1", "admin").unwrap();
+        c.is_favorite = true;
+        c.tags = vec!["Production".into(), "Lab".into()];
+        c.folder = Some("Cloud".into());
+        assert_eq!(c.folder_or_group(), "Cloud");
+
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains(r#""is_favorite":true"#));
+        assert!(json.contains(r#""tags":["Production","Lab"]"#));
+        assert!(json.contains(r#""folder":"Cloud""#));
+
+        let loaded: SavedConnection = serde_json::from_str(&json).unwrap();
+        assert!(loaded.is_favorite);
+        assert_eq!(loaded.tags, vec!["Production", "Lab"]);
+        assert_eq!(loaded.folder.as_deref(), Some("Cloud"));
     }
 }

@@ -21,7 +21,7 @@ use super::session_window::{self, Notice, Notifier};
 use super::settings::{SettingsPage, SettingsPageInput};
 use super::signin::{AccountSignIn, AccountSignInInput, HostSignIn, HostSignInInput};
 use super::signin::{ScaleInput, ScaleWindow};
-use super::views::{self, ADD_CLOUD, ADD_IMPORT, ADD_REMOTE, NAV_ALL, NAV_SETTINGS};
+use super::views::{self, ADD_CLOUD, ADD_IMPORT, ADD_REMOTE, NAV_ALL, NAV_FAVORITES, NAV_SETTINGS};
 use super::{block_on, win32};
 use crate::api::{CloudPcService, GraphApiClient, Snapshot};
 use crate::auth::{Account, AuthManager};
@@ -79,6 +79,7 @@ pub enum Msg {
     AddMenu(String),
     AccountMenu(String),
     ItemMenu(LaunchTarget, String),
+    ToggleFavorite(LaunchTarget),
     Connect(LaunchTarget),
     Dialog(dialogs::DialogMsg),
     ShowAbout,
@@ -923,6 +924,22 @@ impl MainApp {
                 },
                 Purpose::Remove(connection),
             ),
+            (ItemAction::ToggleFavorite, _) => {
+                let store = OverrideStore::default();
+                let current = store.is_favorite(target);
+                if let Err(e) = store.set_favorite(target, !current) {
+                    log::warn!("Could not update favorite status: {e}");
+                }
+                if let LaunchTarget::RemotePc(id) = target {
+                    if let Ok(mut conns) = SavedConnection::load_all() {
+                        if let Some(c) = conns.iter_mut().find(|c| &c.id == id) {
+                            c.is_favorite = !current;
+                            let _ = c.save();
+                            self.library.remote_pcs = conns;
+                        }
+                    }
+                }
+            }
             (action, _) => log::debug!("{action:?} is not available here"),
         }
     }
@@ -1236,14 +1253,26 @@ impl MainApp {
             .library
             .sections(&filter, &self.collapsed, &self.busy, &self.recent)
             .into_iter()
-            .filter(|s| self.page == NAV_ALL || s.id == self.page)
+            .map(|mut s| {
+                if self.page == NAV_FAVORITES {
+                    s.cards.retain(|c| c.is_favorite);
+                }
+                s
+            })
+            .filter(|s| {
+                if self.page == NAV_FAVORITES {
+                    !s.cards.is_empty()
+                } else {
+                    self.page == NAV_ALL || s.id == self.page
+                }
+            })
             .collect();
         let shown: usize = sections.iter().map(|s| s.cards.len()).sum();
         let mut rows: Vec<(String, View)> = Vec::new();
         if !self.search.trim().is_empty() {
             rows.push(("search".into(), self.search_line(ctx, shown)));
         }
-        if self.page == NAV_ALL {
+        if self.page == NAV_ALL || self.page == NAV_FAVORITES {
             for section in &sections {
                 rows.push((
                     section.id.to_string(),
@@ -1259,6 +1288,8 @@ impl MainApp {
         if sections.is_empty() && self.search.trim().is_empty() {
             let text = if self.loading {
                 "Loading…"
+            } else if self.page == NAV_FAVORITES {
+                "No favorites yet. Click the star icon on any connection to add it here."
             } else {
                 "Nothing here yet. Use Add to create a connection."
             };
@@ -1319,7 +1350,11 @@ impl Component for MainApp {
     fn create(input: &Self::Input, ctx: &ComponentContext<Self>) -> Self {
         let config = AppConfig::load();
         let auth = Arc::new(AuthManager::for_profile(config.auth_profile()));
-        let graph = GraphApiClient::new(Arc::clone(&auth), &config.data_boundary);
+        let graph = GraphApiClient::new(
+            Arc::clone(&auth),
+            &config.data_boundary,
+            config.cloud_environment,
+        );
         let service = Arc::new(CloudPcService::new(graph));
         let sender = ctx.sender();
         let notifier: Notifier = Rc::new(move |notice| {
@@ -1423,6 +1458,22 @@ impl Component for MainApp {
             },
             Msg::AccountMenu(label) => self.account_chosen(&label, ctx),
             Msg::ItemMenu(target, label) => self.item_action(&target, &label, ctx),
+            Msg::ToggleFavorite(target) => {
+                let store = OverrideStore::default();
+                let current = store.is_favorite(&target);
+                if let Err(e) = store.set_favorite(&target, !current) {
+                    log::warn!("Could not update favorite status: {e}");
+                }
+                if let LaunchTarget::RemotePc(id) = &target {
+                    if let Ok(mut conns) = SavedConnection::load_all() {
+                        if let Some(c) = conns.iter_mut().find(|c| &c.id == id) {
+                            c.is_favorite = !current;
+                            let _ = c.save();
+                            self.library.remote_pcs = conns;
+                        }
+                    }
+                }
+            }
             Msg::Connect(target) => self.connect(&target, ctx),
             Msg::Dialog(dialog_msg) => {
                 if let Some(active) = &mut self.active_dialog {

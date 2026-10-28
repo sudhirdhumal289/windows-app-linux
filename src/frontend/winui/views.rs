@@ -15,14 +15,16 @@ use crate::frontend::common::text::{empty_description, EMPTY_TITLE};
 use crate::models::StatusTone;
 
 pub const NAV_ALL: &str = "all";
+pub const NAV_FAVORITES: &str = "favorites";
 pub const NAV_SETTINGS: &str = "settings";
 
 pub const ADD_CLOUD: &str = "Cloud PC or Azure Virtual Desktop…";
 pub const ADD_REMOTE: &str = "Remote PC…";
 pub const ADD_IMPORT: &str = "Import .rdp File…";
 
-const NAV_PAGES: [(&str, &str, &str); 4] = [
+const NAV_PAGES: [(&str, &str, &str); 5] = [
     (NAV_ALL, "All connections", "\u{E80F}"),
+    (NAV_FAVORITES, "Favorites", "\u{E735}"),
     (SECTION_CLOUD_PCS, "Cloud PCs", "\u{E753}"),
     (SECTION_AVD, "Azure Virtual Desktop", "\u{E7F4}"),
     (SECTION_REMOTE_PCS, "Remote PCs", "\u{E703}"),
@@ -125,6 +127,7 @@ pub fn action_from_label(label: &str) -> Option<ItemAction> {
         ItemAction::ConnectAtLogin,
         ItemAction::ConnectionSettings,
         ItemAction::Preferences,
+        ItemAction::ToggleFavorite,
     ];
     ACTIONS.into_iter().find(|action| action.label() == label)
 }
@@ -172,6 +175,27 @@ fn caption(text: &str) -> TextBlock {
         .font_size(12.0)
         .opacity(0.7)
         .text_trimming(TextTrimming::CharacterEllipsis)
+}
+
+fn favorite_button(ctx: &ViewContext<MainApp>, card: &CardView) -> View {
+    let target = card.item.target();
+    let glyph = if card.is_favorite {
+        "\u{E735}"
+    } else {
+        "\u{E734}"
+    };
+    let tip = if card.is_favorite {
+        "Remove from Favorites"
+    } else {
+        "Add to Favorites"
+    };
+    Button::new()
+        .style(ButtonStyle::Subtle)
+        .vertical_alignment(VerticalAlignment::Top)
+        .content(FontIcon::new().glyph(glyph))
+        .tooltip(tip)
+        .on_click(ctx.callback(move |()| Msg::ToggleFavorite(target.clone())))
+        .into()
 }
 
 fn more_button(ctx: &ViewContext<MainApp>, card: &CardView) -> View {
@@ -282,10 +306,12 @@ fn tile(ctx: &ViewContext<MainApp>, card: &CardView) -> View {
                 .columns([GridLength::Star(1.0), GridLength::Auto])
                 .children((
                     connect_button(ctx, card, body),
-                    Border::new()
+                    StackPanel::new()
                         .grid_column(1)
+                        .orientation(Orientation::Horizontal)
                         .margin(Thickness::new(0.0, 6.0, 6.0, 0.0))
-                        .content(more_button(ctx, card)),
+                        .spacing(2.0)
+                        .children((favorite_button(ctx, card), more_button(ctx, card))),
                 )),
         )
 }
@@ -339,11 +365,13 @@ fn row(ctx: &ViewContext<MainApp>, card: &CardView) -> View {
                 .columns([GridLength::Star(1.0), GridLength::Auto])
                 .children((
                     connect_button(ctx, card, body),
-                    Border::new()
+                    StackPanel::new()
                         .grid_column(1)
+                        .orientation(Orientation::Horizontal)
                         .margin(Thickness::new(0.0, 0.0, 8.0, 0.0))
                         .vertical_alignment(VerticalAlignment::Center)
-                        .content(more_button(ctx, card)),
+                        .spacing(2.0)
+                        .children((favorite_button(ctx, card), more_button(ctx, card))),
                 )),
         )
 }

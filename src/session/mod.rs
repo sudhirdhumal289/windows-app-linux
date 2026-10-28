@@ -2,7 +2,10 @@
 //! private `.rdp` file and the FreeRDP command line handed to the embedded engine
 //! ([`crate::rdp`]).
 
+pub mod diagnostics;
 pub mod keys;
+
+pub use diagnostics::SessionDiagnostics;
 
 use crate::api::RdpLaunch;
 use crate::config::{storage, AppConfig};

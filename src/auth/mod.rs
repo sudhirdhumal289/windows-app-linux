@@ -12,7 +12,7 @@ pub mod token_store;
 pub use account::Account;
 pub use token_store::TokenStore;
 
-use crate::config::{AuthProfile, CLOUD_PC_SCOPES, COMMON_AUTHORITY, UA_WINDOWS_11_WAM};
+use crate::config::{AuthProfile, CloudEnvironment, CLOUD_PC_SCOPES, UA_WINDOWS_11_WAM};
 use crate::error::{AppError, Result};
 use crate::models::{DeviceCodeResponse, TokenResponse};
 use chrono::Utc;
@@ -68,7 +68,13 @@ impl AuthManager {
 
     #[must_use]
     pub fn for_profile(profile: AuthProfile) -> Self {
-        Self::new(COMMON_AUTHORITY, profile.client_id())
+        let env = crate::config::AppConfig::load().cloud_environment;
+        Self::for_profile_and_env(profile, env)
+    }
+
+    #[must_use]
+    pub fn for_profile_and_env(profile: AuthProfile, env: CloudEnvironment) -> Self {
+        Self::new(env.authority(), profile.client_id())
     }
 
     #[must_use]
@@ -489,7 +495,11 @@ mod tests {
 
     #[test]
     fn imports_bare_and_json_tokens() {
-        let auth = AuthManager::with_store(COMMON_AUTHORITY, WINDOWS_APP_CLIENT_ID, leaked_store());
+        let auth = AuthManager::with_store(
+            CloudEnvironment::Commercial.authority(),
+            WINDOWS_APP_CLIENT_ID,
+            leaked_store(),
+        );
         let exp = Utc::now().timestamp() + 600;
         let jwt = jwt::make_unsigned(&serde_json::json!({ "exp": exp }));
         let t = auth.import_token(&format!("Bearer {jwt}")).unwrap();

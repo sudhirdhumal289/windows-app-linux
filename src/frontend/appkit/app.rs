@@ -22,6 +22,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Filter {
     All,
+    Favorites,
     /// One of the library sections ([`library::SECTION_CLOUD_PCS`], …).
     Section(&'static str),
     /// Remote PCs of one group.
@@ -30,6 +31,7 @@ pub(super) enum Filter {
 
 /// Counts and groups for the sidebar.
 pub(super) struct SidebarCounts {
+    pub favorites: usize,
     pub cloud_pcs: usize,
     pub avd: usize,
     pub remote_pcs: usize,
@@ -76,7 +78,11 @@ impl App {
     pub(super) fn start(mtm: MainThreadMarker) -> Rc<Self> {
         let config = AppConfig::load();
         let auth = Arc::new(AuthManager::for_profile(config.auth_profile()));
-        let graph = GraphApiClient::new(Arc::clone(&auth), &config.data_boundary);
+        let graph = GraphApiClient::new(
+            Arc::clone(&auth),
+            &config.data_boundary,
+            config.cloud_environment,
+        );
         let service = Arc::new(CloudPcService::new(graph));
         let connections = ConnectionStore::default();
         let library = Library {
@@ -234,6 +240,15 @@ impl App {
         );
         match &*self.filter.borrow() {
             Filter::All => sections,
+            Filter::Favorites => sections
+                .into_iter()
+                .map(|mut s| {
+                    s.cards.retain(|c| c.is_favorite);
+                    s.expanded = true;
+                    s
+                })
+                .filter(|s| !s.cards.is_empty())
+                .collect(),
             Filter::Section(id) => sections
                 .into_iter()
                 .filter(|s| s.id == *id)
@@ -247,7 +262,7 @@ impl App {
                 .filter(|s| s.id == library::SECTION_REMOTE_PCS)
                 .map(|mut s| {
                     s.cards.retain(
-                        |c| matches!(&c.item, Item::Remote(connection) if connection.group == *group),
+                        |c| matches!(&c.item, Item::Remote(connection) if connection.folder_or_group() == group.as_str()),
                     );
                     s.expanded = true;
                     s
@@ -258,19 +273,33 @@ impl App {
     }
 
     pub(super) fn sidebar_counts(&self) -> SidebarCounts {
+        let filter = SearchFilter::new("");
+        let recent = self.recent.load();
+        let all_sections =
+            self.library
+                .borrow()
+                .sections(&filter, &HashSet::new(), &HashSet::new(), &recent);
+        let favorites = all_sections
+            .iter()
+            .flat_map(|s| &s.cards)
+            .filter(|c| c.is_favorite)
+            .count();
+
         let library = self.library.borrow();
         let mut groups: Vec<(String, usize)> = Vec::new();
         for connection in &library.remote_pcs {
-            if connection.group.is_empty() {
+            let folder = connection.folder_or_group();
+            if folder.is_empty() {
                 continue;
             }
-            match groups.iter_mut().find(|(g, _)| *g == connection.group) {
+            match groups.iter_mut().find(|(g, _)| g.as_str() == folder) {
                 Some((_, count)) => *count += 1,
-                None => groups.push((connection.group.clone(), 1)),
+                None => groups.push((folder.to_string(), 1)),
             }
         }
         groups.sort_by_key(|(g, _)| g.to_lowercase());
         SidebarCounts {
+            favorites,
             cloud_pcs: library.cloud_pcs.len(),
             avd: library.avd.len(),
             remote_pcs: library.remote_pcs.len(),

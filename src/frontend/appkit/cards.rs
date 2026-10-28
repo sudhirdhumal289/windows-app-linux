@@ -224,6 +224,17 @@ impl Card {
             rect(width - PAD - 24.0, PAD + THUMB_HEIGHT + 8.0, 24.0, 22.0),
             fixed_right,
         );
+        if card.is_favorite {
+            let item = card.item.clone();
+            let star = util::symbol_button(mtm, "star.fill", "Favorite", move |_| {
+                app::with(|app| app.item_action(item.clone(), ItemAction::ToggleFavorite));
+            });
+            self.place(
+                &star,
+                rect(width - PAD - 50.0, PAD + THUMB_HEIGHT + 8.0, 24.0, 22.0),
+                fixed_right,
+            );
+        }
     }
 
     fn build_row(&self, width: f64) {
@@ -252,6 +263,13 @@ impl Card {
         let more = self.more_button();
         let more_x = width - PAD - 24.0;
         self.place(&more, rect(more_x, 16.0, 24.0, 24.0), fixed_right);
+        if card.is_favorite {
+            let item = card.item.clone();
+            let star = util::symbol_button(mtm, "star.fill", "Favorite", move |_| {
+                app::with(|app| app.item_action(item.clone(), ItemAction::ToggleFavorite));
+            });
+            self.place(&star, rect(more_x - 30.0, 16.0, 24.0, 24.0), fixed_right);
+        }
         let play_x = more_x - 8.0 - 28.0;
         self.place(
             &self.ivars().play,

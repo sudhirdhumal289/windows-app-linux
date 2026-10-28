@@ -3,7 +3,7 @@
 
 use super::app::App;
 use super::util::{self, ns};
-use crate::config::{AppConfig, AuthProfile};
+use crate::config::{AppConfig, AuthProfile, CloudEnvironment};
 use crate::connections::{
     AddressError, AuthMethod, CertificatePolicy, Gateway, RemoteApp, SavedConnection,
     SecurityProtocol,
@@ -695,6 +695,27 @@ pub(super) fn show_settings(app: &Rc<App>) {
             save(&|c| c.auth_profile_index = index);
         }
     });
+    let env_popup = Form::popup(
+        mtm,
+        &CloudEnvironment::ALL
+            .iter()
+            .map(|e| e.label().to_string())
+            .collect::<Vec<_>>(),
+        CloudEnvironment::ALL
+            .iter()
+            .position(|e| *e == config.cloud_environment)
+            .unwrap_or(0),
+    );
+    util::on_action(&env_popup, move |sender| {
+        if let Some(popup) = sender.downcast_ref::<NSPopUpButton>() {
+            if let Some(env) = CloudEnvironment::ALL.get(Form::selected(popup)).copied() {
+                save(&|c| {
+                    c.cloud_environment = env;
+                    c.data_boundary = env.data_boundary().to_string();
+                });
+            }
+        }
+    });
     let graphics = Form::popup(
         mtm,
         &GRAPHICS_MODES
@@ -818,6 +839,8 @@ pub(super) fn show_settings(app: &Rc<App>) {
         "The platform identity used during Microsoft sign-in. Takes effect the next time \
          the app starts.",
     );
+    form.row("Cloud environment:", &env_popup);
+    form.note("Commercial (Global), US Government (GCC High / DoD), or China (21Vianet).");
     form.row("Graphics:", &graphics);
     form.row("Connection quality:", &quality);
     form.row("Display:", &multi_monitor);

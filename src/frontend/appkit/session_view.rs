@@ -532,6 +532,9 @@ fn is_local_shortcut(event: &NSEvent) -> bool {
         .map(|s| s.to_string().to_lowercase())
         .unwrap_or_default();
     if flags.contains(NSEventModifierFlags::Control) {
+        if flags.contains(NSEventModifierFlags::Shift) && key == "d" {
+            return true;
+        }
         return key == "f";
     }
     matches!(key.as_str(), "q" | "w" | "h" | "m")

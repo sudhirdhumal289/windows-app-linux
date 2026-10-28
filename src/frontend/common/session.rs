@@ -13,6 +13,7 @@ use crate::rdp::{
     input, BridgeEvent, BridgeOptions, CertificateDecision, CertificatePrompt, LocalClipboard,
     LockKeys, MonitorRect, MouseButton, NativeRdpBridge, SessionStatus, WheelAccumulator,
 };
+use crate::session::diagnostics::SessionDiagnostics;
 use crate::session::keys::{self, KeyCombo, KeyInput};
 use crate::session::{PreparedSession, ScaleChoice};
 use std::collections::VecDeque;
@@ -78,6 +79,7 @@ pub struct SessionController {
     pointer: (u16, u16),
     view_only: bool,
     has_frame: bool,
+    diagnostics: SessionDiagnostics,
 }
 
 impl SessionController {
@@ -124,6 +126,7 @@ impl SessionController {
             pointer: (0, 0),
             view_only: false,
             has_frame: false,
+            diagnostics: SessionDiagnostics::new(),
         })
     }
 
@@ -144,7 +147,13 @@ impl SessionController {
                         self.end();
                     }
                 }
-                BridgeEvent::FrameUpdated => self.has_frame = true,
+                BridgeEvent::FrameUpdated => {
+                    self.has_frame = true;
+                    self.diagnostics.record_frame(std::time::Instant::now());
+                }
+                BridgeEvent::Network(stats) => {
+                    self.diagnostics.update_network(*stats);
+                }
                 _ => {}
             }
         }
@@ -166,6 +175,15 @@ impl SessionController {
     #[must_use]
     pub fn has_frame(&self) -> bool {
         self.has_frame
+    }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> &SessionDiagnostics {
+        &self.diagnostics
+    }
+
+    pub fn diagnostics_mut(&mut self) -> &mut SessionDiagnostics {
+        &mut self.diagnostics
     }
 
     /// Disconnects (in the background) and runs the command after disconnecting.

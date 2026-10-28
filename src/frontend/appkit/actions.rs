@@ -65,6 +65,20 @@ impl App {
                 self.set_status("The saved password was removed.");
             }
             (ItemAction::Remove, Item::Remote(connection)) => self.remove_remote_pc(connection),
+            (ItemAction::ToggleFavorite, item) => {
+                let target = item.target();
+                let store = crate::overrides::OverrideStore::default();
+                let current = store.is_favorite(&target);
+                if let Err(e) = store.set_favorite(&target, !current) {
+                    log::warn!("Could not update favorite status: {e}");
+                }
+                if let Item::Remote(mut connection) = item {
+                    connection.is_favorite = !current;
+                    self.save_remote_pc(connection);
+                } else {
+                    self.refresh();
+                }
+            }
             (action, item) => log::debug!("{action:?} does not apply to {}", item.title()),
         }
     }

@@ -167,7 +167,11 @@ fn create_main_window(app: &adw::Application) -> Rc<AppMainWindow> {
 
     let config = AppConfig::load();
     let auth = Arc::new(AuthManager::for_profile(config.auth_profile()));
-    let graph = GraphApiClient::new(Arc::clone(&auth), &config.data_boundary);
+    let graph = GraphApiClient::new(
+        Arc::clone(&auth),
+        &config.data_boundary,
+        config.cloud_environment,
+    );
     let service = Arc::new(CloudPcService::new(graph));
     AppMainWindow::new(app, auth, service)
 }

@@ -9,7 +9,8 @@ use crate::models::{CloudPc, CloudPcAction, StatusTone};
 use crate::platform;
 use adw::prelude::*;
 use gtk4::{
-    gio, Box, GestureClick, Image, Label, MenuButton, Orientation, Separator, Spinner, Widget,
+    gio, Box, Button, GestureClick, Image, Label, MenuButton, Orientation, Separator, Spinner,
+    Widget,
 };
 use std::rc::Rc;
 
@@ -43,6 +44,8 @@ pub enum CardAction {
     ToggleLauncher(LaunchTarget, bool),
     /// Connect (or stop connecting) when the user logs in.
     ToggleAutostart(LaunchTarget, bool),
+    /// Star or unstar a connection as a favorite.
+    ToggleFavorite(LaunchTarget, bool),
     Settings,
     /// Per-connection settings of the target (named for the dialog title).
     ConnectionSettings(LaunchTarget, String),
@@ -74,6 +77,8 @@ struct CardView {
     menu_tooltip: &'static str,
     /// When the connection was last used ("2 hours ago").
     last_used: Option<String>,
+    is_favorite: bool,
+    target: LaunchTarget,
 }
 
 pub struct ConnectionCard;
@@ -84,10 +89,12 @@ impl ConnectionCard {
         pc: &CloudPc,
         mode: CardLayoutMode,
         is_connecting: bool,
+        is_favorite: bool,
         last_used: Option<String>,
         on_action: impl Fn(CardAction) + 'static,
     ) -> Widget {
         let on_action: ActionHandler = Rc::new(on_action);
+        let target = LaunchTarget::CloudPc(pc.id.clone());
         let view = CardView {
             title: pc.display_name.clone(),
             account: pc.user_principal_name.clone(),
@@ -97,31 +104,44 @@ impl ConnectionCard {
             icon: CardIcon::Windows,
             status: Some(status_label(pc)),
             connect_tooltip: "Click to connect to Cloud PC",
-            menu: cloud_pc_menu(pc),
+            menu: cloud_pc_menu(pc, is_favorite),
             menu_tooltip: "Cloud PC Actions",
             last_used,
+            is_favorite,
+            target: target.clone(),
         };
         let group = cloud_pc_actions(pc, &on_action);
-        let target = LaunchTarget::CloudPc(pc.id.clone());
+        add_favorite_action(&group, &target, is_favorite, &on_action);
         add_settings_actions(&group, &target, &pc.display_name, &on_action);
         add_desktop_actions(&group, &target, &on_action);
         let pc = pc.clone();
-        let connect = move || on_action(CardAction::Connect(pc.clone()));
-        build(&view, mode, is_connecting, &group, Rc::new(connect))
+        let on_act = Rc::clone(&on_action);
+        let connect = move || on_act(CardAction::Connect(pc.clone()));
+        build(
+            &view,
+            mode,
+            is_connecting,
+            &group,
+            Rc::new(connect),
+            &on_action,
+        )
     }
 
     /// Card (grid) or row (list) for a saved Remote PC.
     pub fn remote_pc(
         connection: &SavedConnection,
         mode: CardLayoutMode,
+        is_favorite: bool,
         last_used: Option<String>,
         on_action: impl Fn(CardAction) + 'static,
     ) -> Widget {
         let on_action: ActionHandler = Rc::new(on_action);
+        let target = LaunchTarget::RemotePc(connection.id.clone());
+        let folder_or_group = connection.folder_or_group();
         let view = CardView {
             title: connection.display_name().to_string(),
             account: Some(connection.username.clone()).filter(|u| !u.is_empty()),
-            kind: match (connection.group.as_str(), &connection.remote_app) {
+            kind: match (folder_or_group, &connection.remote_app) {
                 ("", None) => "Remote PC".to_string(),
                 ("", Some(_)) => "RemoteApp".to_string(),
                 (group, None) => format!("Remote PC · {group}"),
@@ -132,17 +152,20 @@ impl ConnectionCard {
             icon: CardIcon::Named("preferences-desktop-remote-desktop-symbolic"),
             status: None,
             connect_tooltip: "Click to connect to Remote PC",
-            menu: remote_pc_menu(connection),
+            menu: remote_pc_menu(connection, is_favorite),
             menu_tooltip: "Remote PC Actions",
             last_used,
+            is_favorite,
+            target: target.clone(),
         };
         let group = remote_pc_actions(connection, &on_action);
-        let target = LaunchTarget::RemotePc(connection.id.clone());
+        add_favorite_action(&group, &target, is_favorite, &on_action);
         add_settings_actions(&group, &target, connection.display_name(), &on_action);
         add_desktop_actions(&group, &target, &on_action);
         let connection = connection.clone();
-        let connect = move || on_action(CardAction::ConnectRemote(connection.clone()));
-        build(&view, mode, false, &group, Rc::new(connect))
+        let on_act = Rc::clone(&on_action);
+        let connect = move || on_act(CardAction::ConnectRemote(connection.clone()));
+        build(&view, mode, false, &group, Rc::new(connect), &on_action)
     }
 
     /// Card (grid) or row (list) for an Azure Virtual Desktop desktop or RemoteApp.
@@ -150,10 +173,12 @@ impl ConnectionCard {
         resource: &AvdResource,
         mode: CardLayoutMode,
         is_connecting: bool,
+        is_favorite: bool,
         last_used: Option<String>,
         on_action: impl Fn(CardAction) + 'static,
     ) -> Widget {
         let on_action: ActionHandler = Rc::new(on_action);
+        let target = LaunchTarget::Avd(resource.id.clone());
         let (icon, tooltip) = match resource.kind {
             AvdResourceKind::Desktop => ("computer-symbolic", "Click to connect to the desktop"),
             AvdResourceKind::RemoteApp => (
@@ -170,21 +195,31 @@ impl ConnectionCard {
             icon: CardIcon::Named(icon),
             status: None,
             connect_tooltip: tooltip,
-            menu: avd_menu(),
+            menu: avd_menu(is_favorite),
             menu_tooltip: "Azure Virtual Desktop Actions",
             last_used,
+            is_favorite,
+            target: target.clone(),
         };
         let group = gio::SimpleActionGroup::new();
         let r = resource.clone();
         add_action(&group, "connect", &on_action, move || {
             CardAction::ConnectAvd(r.clone())
         });
-        let target = LaunchTarget::Avd(resource.id.clone());
+        add_favorite_action(&group, &target, is_favorite, &on_action);
         add_settings_actions(&group, &target, &resource.title, &on_action);
         add_desktop_actions(&group, &target, &on_action);
         let resource = resource.clone();
-        let connect = move || on_action(CardAction::ConnectAvd(resource.clone()));
-        build(&view, mode, is_connecting, &group, Rc::new(connect))
+        let on_act = Rc::clone(&on_action);
+        let connect = move || on_act(CardAction::ConnectAvd(resource.clone()));
+        build(
+            &view,
+            mode,
+            is_connecting,
+            &group,
+            Rc::new(connect),
+            &on_action,
+        )
     }
 }
 
@@ -194,10 +229,11 @@ fn build(
     is_connecting: bool,
     actions: &gio::SimpleActionGroup,
     connect: Rc<dyn Fn()>,
+    on_action: &ActionHandler,
 ) -> Widget {
     let widget = match mode {
-        CardLayoutMode::Grid => grid_card(view, is_connecting, connect),
-        CardLayoutMode::List => list_row(view, is_connecting, connect),
+        CardLayoutMode::Grid => grid_card(view, is_connecting, connect, on_action),
+        CardLayoutMode::List => list_row(view, is_connecting, connect, on_action),
     };
     widget.insert_action_group("card", Some(actions));
     widget.set_sensitive(!is_connecting);
@@ -205,7 +241,12 @@ fn build(
 }
 
 /// Card with an icon banner (click to connect), details and the actions menu.
-fn grid_card(view: &CardView, is_connecting: bool, connect: Rc<dyn Fn()>) -> Widget {
+fn grid_card(
+    view: &CardView,
+    is_connecting: bool,
+    connect: Rc<dyn Fn()>,
+    on_action: &ActionHandler,
+) -> Widget {
     let card_box = Box::new(Orientation::Vertical, 0);
     card_box.set_size_request(290, 250);
     card_box.add_css_class("card");
@@ -220,8 +261,11 @@ fn grid_card(view: &CardView, is_connecting: bool, connect: Rc<dyn Fn()>) -> Wid
     banner_top.set_margin_start(12);
     banner_top.set_margin_end(12);
     banner_top.set_margin_top(10);
-    // Keeps the icon at the same height whether or not there is a status.
     banner_top.set_size_request(-1, 16);
+
+    let star_btn = star_button(view.target.clone(), view.is_favorite, on_action);
+    banner_top.append(&star_btn);
+
     if let Some(status) = &view.status {
         status.set_halign(gtk4::Align::End);
         status.set_hexpand(true);
@@ -290,7 +334,13 @@ fn grid_card(view: &CardView, is_connecting: bool, connect: Rc<dyn Fn()>) -> Wid
 }
 
 /// Activatable boxed-list row with icon, details, status and the actions menu.
-fn list_row(view: &CardView, is_connecting: bool, connect: Rc<dyn Fn()>) -> Widget {
+fn list_row(
+    view: &CardView,
+    is_connecting: bool,
+    connect: Rc<dyn Fn()>,
+    on_action: &ActionHandler,
+) -> Widget {
+    let star_btn = star_button(view.target.clone(), view.is_favorite, on_action);
     let mut subtitle = format!("{} • {}", view.kind, view.detail);
     if let Some(last_used) = &view.last_used {
         subtitle.push_str(" • ");
@@ -320,6 +370,7 @@ fn list_row(view: &CardView, is_connecting: bool, connect: Rc<dyn Fn()>) -> Widg
     let spinner = spinner(is_connecting);
     spinner.set_valign(gtk4::Align::Center);
     row.add_suffix(&spinner);
+    row.add_suffix(&star_btn);
     let menu_btn = menu_button(view);
     menu_btn.set_valign(gtk4::Align::Center);
     row.add_suffix(&menu_btn);
@@ -385,8 +436,54 @@ fn menu_button(view: &CardView) -> MenuButton {
         .build()
 }
 
-fn settings_section() -> gio::Menu {
+fn star_button(target: LaunchTarget, is_favorite: bool, on_action: &ActionHandler) -> Button {
+    let btn = Button::builder()
+        .icon_name(if is_favorite {
+            "starred-symbolic"
+        } else {
+            "non-starred-symbolic"
+        })
+        .tooltip_text(if is_favorite {
+            "Remove from Favorites"
+        } else {
+            "Add to Favorites"
+        })
+        .valign(gtk4::Align::Center)
+        .build();
+    btn.add_css_class("flat");
+    btn.add_css_class("circular");
+    let on_action = Rc::clone(on_action);
+    btn.connect_clicked(move |_| {
+        on_action(CardAction::ToggleFavorite(target.clone(), !is_favorite));
+    });
+    btn
+}
+
+fn add_favorite_action(
+    group: &gio::SimpleActionGroup,
+    target: &LaunchTarget,
+    is_favorite: bool,
+    on_action: &ActionHandler,
+) {
+    let target = target.clone();
+    let on_action = Rc::clone(on_action);
+    let action = gio::SimpleAction::new("toggle-favorite", None);
+    action.connect_activate(move |_, _| {
+        on_action(CardAction::ToggleFavorite(target.clone(), !is_favorite));
+    });
+    group.add_action(&action);
+}
+
+fn settings_section(is_favorite: bool) -> gio::Menu {
     let section = gio::Menu::new();
+    section.append(
+        Some(if is_favorite {
+            "Remove from Favorites"
+        } else {
+            "Add to Favorites"
+        }),
+        Some("card.toggle-favorite"),
+    );
     section.append(
         Some("Connection Settings…"),
         Some("card.connection-settings"),
@@ -403,7 +500,7 @@ fn desktop_section() -> gio::Menu {
     section
 }
 
-fn cloud_pc_menu(pc: &CloudPc) -> gio::Menu {
+fn cloud_pc_menu(pc: &CloudPc, is_fav: bool) -> gio::Menu {
     let main_section = gio::Menu::new();
     main_section.append(Some("Connect"), Some("card.connect"));
     if pc.allows(CloudPcAction::Start) || pc.allows(CloudPcAction::Stop) {
@@ -430,21 +527,21 @@ fn cloud_pc_menu(pc: &CloudPc) -> gio::Menu {
     menu.append_section(None, &support_section);
     menu.append_section(None, &recovery_section);
     menu.append_section(None, &desktop_section());
-    menu.append_section(None, &settings_section());
+    menu.append_section(None, &settings_section(is_fav));
     menu
 }
 
-fn avd_menu() -> gio::Menu {
+fn avd_menu(is_fav: bool) -> gio::Menu {
     let main_section = gio::Menu::new();
     main_section.append(Some("Connect"), Some("card.connect"));
     let menu = gio::Menu::new();
     menu.append_section(None, &main_section);
     menu.append_section(None, &desktop_section());
-    menu.append_section(None, &settings_section());
+    menu.append_section(None, &settings_section(is_fav));
     menu
 }
 
-fn remote_pc_menu(connection: &SavedConnection) -> gio::Menu {
+fn remote_pc_menu(connection: &SavedConnection, is_fav: bool) -> gio::Menu {
     let main_section = gio::Menu::new();
     main_section.append(Some("Connect"), Some("card.connect"));
     main_section.append(Some("Edit…"), Some("card.edit"));
@@ -458,7 +555,7 @@ fn remote_pc_menu(connection: &SavedConnection) -> gio::Menu {
     menu.append_section(None, &main_section);
     menu.append_section(None, &desktop_section());
     menu.append_section(None, &remove_section);
-    menu.append_section(None, &settings_section());
+    menu.append_section(None, &settings_section(is_fav));
     menu
 }
 

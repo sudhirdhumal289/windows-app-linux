@@ -8,7 +8,7 @@ use windows_reactor::*;
 use super::dialogs::hint_text;
 use super::forms::GRAPHICS_MODES;
 use super::win32;
-use crate::config::{AppConfig, AuthProfile, SharedFolder};
+use crate::config::{AppConfig, AuthProfile, CloudEnvironment, SharedFolder};
 use crate::frontend::common::text::{APP_NAME, COPYRIGHT, REPOSITORY_URL};
 use crate::session::{GraphicsMode, Quality};
 
@@ -48,6 +48,7 @@ impl Switch {
 
 pub enum SettingsPageMsg {
     Profile(Option<usize>),
+    CloudEnvironment(Option<usize>),
     Graphics(Option<usize>),
     Quality(Option<usize>),
     Switch(Switch, bool),
@@ -215,6 +216,13 @@ impl Component for SettingsPage {
                 self.config.auth_profile_index = AuthProfile::from_index(index).index();
                 self.save();
             }
+            SettingsPageMsg::CloudEnvironment(index) => {
+                if let Some(env) = index.and_then(|i| CloudEnvironment::ALL.get(i).copied()) {
+                    self.config.cloud_environment = env;
+                    self.config.data_boundary = env.data_boundary().to_string();
+                    self.save();
+                }
+            }
             SettingsPageMsg::Graphics(index) => {
                 let mode = index
                     .and_then(|i| GRAPHICS_MODES.get(i))
@@ -329,6 +337,24 @@ impl Component for SettingsPage {
                             .collect(),
                         profile,
                         ctx.callback(SettingsPageMsg::Profile),
+                    ),
+                ),
+            ),
+            (
+                "environment".into(),
+                setting_card(
+                    "Cloud environment",
+                    "Choose between Microsoft Commercial (Global), US Government (GCC High / DoD), or China (21Vianet).",
+                    combo(
+                        CloudEnvironment::ALL
+                            .iter()
+                            .map(|e| e.label().to_string())
+                            .collect(),
+                        CloudEnvironment::ALL
+                            .iter()
+                            .position(|e| *e == config.cloud_environment)
+                            .unwrap_or(0),
+                        ctx.callback(SettingsPageMsg::CloudEnvironment),
                     ),
                 ),
             ),

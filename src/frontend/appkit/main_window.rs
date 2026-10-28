@@ -286,6 +286,12 @@ fn sidebar_rows(counts: &SidebarCounts) -> Vec<SidebarRow> {
     };
     let mut rows = vec![
         entry("All Connections", "square.grid.2x2", None, Filter::All),
+        entry(
+            "Favorites",
+            "star.fill",
+            Some(counts.favorites),
+            Filter::Favorites,
+        ),
         SidebarRow::Header("Library"),
         entry(
             "Cloud PCs",

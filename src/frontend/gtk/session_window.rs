@@ -99,6 +99,10 @@ pub struct SessionWindow {
     /// Latest remote frame, shared by all canvases.
     texture: RefCell<Option<gdk::Texture>>,
     /// Connection quality indicators (header and dock).
+    hud: Box,
+    hud_label: gtk4::Label,
+    hud_visible: Cell<bool>,
+    diagnostics: RefCell<crate::session::diagnostics::SessionDiagnostics>,
     quality_icons: Vec<gtk4::Image>,
     /// Connection whose window placement is remembered, and the placement last saved.
     placement_key: Option<LaunchTarget>,
@@ -165,6 +169,8 @@ impl SessionWindow {
 
         let (loading, loading_label) = loading_card(name);
         overlay.add_overlay(&loading);
+        let (hud, hud_label) = hud_card();
+        overlay.add_overlay(&hud);
 
         let dock = FullscreenDock::new(
             &window,
@@ -216,6 +222,10 @@ impl SessionWindow {
             multi_monitor: options.multi_monitor,
             screens: RefCell::new(Vec::new()),
             texture: RefCell::new(None),
+            hud,
+            hud_label,
+            hud_visible: Cell::new(false),
+            diagnostics: RefCell::new(crate::session::diagnostics::SessionDiagnostics::new()),
             quality_icons: vec![header_quality, dock.quality_icon.clone()],
             placement: RefCell::new(
                 options
@@ -380,6 +390,12 @@ impl SessionWindow {
     fn handle_event(self: &Rc<Self>, event: BridgeEvent) {
         match event {
             BridgeEvent::FrameUpdated => {
+                self.diagnostics
+                    .borrow_mut()
+                    .record_frame(std::time::Instant::now());
+                if self.hud_visible.get() {
+                    self.update_hud();
+                }
                 self.frame_dirty.set(true);
                 if !self.has_frame.replace(true) {
                     let texture = self
@@ -529,6 +545,10 @@ impl SessionWindow {
     }
 
     fn show_network(&self, stats: NetworkStats) {
+        self.diagnostics.borrow_mut().update_network(stats);
+        if self.hud_visible.get() {
+            self.update_hud();
+        }
         let icon = match stats.quality() {
             ConnectionQuality::Excellent => "network-cellular-signal-excellent-symbolic",
             ConnectionQuality::Good => "network-cellular-signal-good-symbolic",
@@ -1127,6 +1147,11 @@ impl SessionWindow {
             if this.local_ui_has_keyboard() {
                 return glib::Propagation::Proceed;
             }
+            let ctrl_shift = ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK;
+            if state.contains(ctrl_shift) && matches!(keyval, Key::d | Key::D) {
+                this.toggle_hud();
+                return glib::Propagation::Stop;
+            }
             let ctrl_alt = ModifierType::CONTROL_MASK | ModifierType::ALT_MASK;
             if state.contains(ctrl_alt) && matches!(keyval, Key::Return | Key::KP_Enter) {
                 toggle_fullscreen(&this.window);
@@ -1258,6 +1283,15 @@ impl SessionWindow {
         });
         group.add_action(&capture);
 
+        let toggle_hud = gio::SimpleAction::new("toggle-hud", None);
+        let weak = Rc::downgrade(self);
+        toggle_hud.connect_activate(move |_, _| {
+            if let Some(this) = weak.upgrade() {
+                this.toggle_hud();
+            }
+        });
+        group.add_action(&toggle_hud);
+
         let view_only = gio::SimpleAction::new_stateful("view-only", None, &false.to_variant());
         let weak = Rc::downgrade(self);
         view_only.connect_change_state(move |action, value| {
@@ -1374,6 +1408,27 @@ impl SessionWindow {
         });
     }
 
+    fn toggle_hud(&self) {
+        let visible = !self.hud_visible.get();
+        self.hud_visible.set(visible);
+        self.hud.set_visible(visible);
+        if visible {
+            self.update_hud();
+        }
+    }
+
+    fn update_hud(&self) {
+        let (w, h) = self.bridge().map_or((0, 0), |b| b.frame_size());
+        let scale = match self.scale.get() {
+            ScaleChoice::Auto => 100,
+            ScaleChoice::Percent(p) => p,
+        };
+        let mut diag = self.diagnostics.borrow_mut();
+        diag.set_display(w, h, scale);
+        let text = diag.format_hud();
+        self.hud_label.set_text(&text);
+    }
+
     fn lock_keys(&self) -> LockKeys {
         let keyboard = WidgetExt::display(&self.window)
             .default_seat()
@@ -1462,6 +1517,10 @@ fn session_menu() -> gio::Menu {
     tools.append(Some("Save Screenshot"), Some("session.screenshot"));
     let toggles = gio::Menu::new();
     toggles.append(
+        Some("Performance HUD (Ctrl+Shift+D)"),
+        Some("session.toggle-hud"),
+    );
+    toggles.append(
         Some("Capture System Shortcuts"),
         Some("session.capture-shortcuts"),
     );
@@ -1477,6 +1536,37 @@ fn scale_item(label: &str, choice: ScaleChoice) -> gio::MenuItem {
     let item = gio::MenuItem::new(Some(label), None);
     item.set_action_and_target_value(Some("win.scale"), Some(&choice.id().to_variant()));
     item
+}
+
+fn hud_card() -> (Box, gtk4::Label) {
+    let card = Box::new(Orientation::Vertical, 6);
+    card.set_halign(gtk4::Align::End);
+    card.set_valign(gtk4::Align::Start);
+    card.set_margin_top(20);
+    card.set_margin_end(20);
+    card.add_css_class("card");
+    card.set_can_target(false);
+    card.set_visible(false);
+
+    let header_box = Box::new(Orientation::Horizontal, 8);
+    let title = gtk4::Label::new(Some("Performance HUD"));
+    title.set_halign(gtk4::Align::Start);
+    title.add_css_class("heading");
+    let hint = gtk4::Label::new(Some("Ctrl+Shift+D"));
+    hint.set_halign(gtk4::Align::End);
+    hint.set_hexpand(true);
+    hint.add_css_class("dim-label");
+    header_box.append(&title);
+    header_box.append(&hint);
+    card.append(&header_box);
+
+    let label = gtk4::Label::new(None);
+    label.set_halign(gtk4::Align::Start);
+    label.add_css_class("monospace");
+    label.set_margin_top(4);
+    card.append(&label);
+
+    (card, label)
 }
 
 fn loading_card(name: &str) -> (Box, gtk4::Label) {

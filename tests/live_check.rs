@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use windows_app::api::{CloudPcService, GraphApiClient};
 use windows_app::auth::AuthManager;
-use windows_app::config::constants::{COMMON_AUTHORITY, WINDOWS_APP_CLIENT_ID};
+use windows_app::config::constants::{CloudEnvironment, COMMON_AUTHORITY, WINDOWS_APP_CLIENT_ID};
 use windows_app::session::{self, SessionOptions};
 use windows_app::AppConfig;
 
@@ -16,7 +16,11 @@ async fn live_cloud_pc_launch() {
         eprintln!("Not signed in; skipping");
         return;
     }
-    let service = CloudPcService::new(GraphApiClient::new(auth, "commercial"));
+    let service = CloudPcService::new(GraphApiClient::new(
+        auth,
+        "commercial",
+        CloudEnvironment::Commercial,
+    ));
     let pcs = service
         .list_user_cloud_pcs()
         .await

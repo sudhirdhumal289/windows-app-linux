@@ -69,15 +69,25 @@ pub fn show(
 
     // Organisation and sign-in.
     let domain_row = entry("Domain (optional)", &base.domain);
-    let group_row = entry("Group (optional)", &base.group);
+    let group_row = entry("Folder / Group (optional)", base.folder_or_group());
+    let tags_row = entry("Tags (comma separated)", &base.tags.join(", "));
+    let favorite_row = adw::SwitchRow::builder()
+        .title("Favorite")
+        .subtitle("Star this connection for quick access")
+        .active(base.is_favorite)
+        .build();
     let remember_row = adw::SwitchRow::builder()
         .title("Remember Password")
         .subtitle("Keep the password in the system keyring")
         .active(base.remember_password)
         .build();
-    let sign_in = adw::PreferencesGroup::builder().title("Sign-in").build();
+    let sign_in = adw::PreferencesGroup::builder()
+        .title("Sign-in & Organization")
+        .build();
     sign_in.add(&domain_row);
     sign_in.add(&group_row);
+    sign_in.add(&tags_row);
+    sign_in.add(&favorite_row);
     sign_in.add(&remember_row);
 
     // Gateway.
@@ -168,6 +178,8 @@ pub fn show(
             username_row.clone(),
             domain_row.clone(),
             group_row.clone(),
+            tags_row.clone(),
+            favorite_row.clone(),
             remember_row.clone(),
         );
         let gateway_rows = (
@@ -188,11 +200,19 @@ pub fn show(
             auth_row.clone(),
         );
         Rc::new(move || -> Result<SavedConnection, AddressError> {
-            let (address, name, username, domain, group, remember) = &rows;
+            let (address, name, username, domain, group, tags, fav, remember) = &rows;
             let mut connection = base.clone();
             connection.update(&name.text(), &address.text(), &username.text())?;
             connection.domain = domain.text().to_string();
             connection.group = group.text().to_string();
+            connection.folder = Some(group.text().to_string()).filter(|s| !s.is_empty());
+            connection.tags = tags
+                .text()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            connection.is_favorite = fav.is_active();
             connection.remember_password = remember.is_active();
             let (gw, gw_address, gw_separate, gw_user) = &gateway_rows;
             connection.gateway = gw.enables_expansion().then(|| Gateway {

@@ -4,7 +4,7 @@
 //! feed is an RD Web `ResourceCollection` with the resources and their signed `.rdp` URLs.
 
 use crate::api::cloudpc::CloudPcService;
-use crate::config::{AVD_RESOURCE_SCOPE, RDWEB_FEED_URL, RDWEB_USER_AGENT};
+use crate::config::{AVD_RESOURCE_SCOPE, RDWEB_USER_AGENT};
 use crate::error::{AppError, Result};
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -129,9 +129,10 @@ impl CloudPcService {
             .auth()
             .token_for_scope(AVD_RESOURCE_SCOPE)
             .await?;
+        let discovery_url = self.client().environment().rdweb_feed_url();
         let Some(discovery) = self
             .fetch_feed_xml(
-                RDWEB_FEED_URL,
+                discovery_url,
                 &token,
                 "application/x-msts-radc-discovery+xml, text/xml",
             )

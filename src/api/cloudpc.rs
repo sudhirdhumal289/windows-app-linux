@@ -1,7 +1,7 @@
 //! Cloud PC discovery, lifecycle actions and RDP launch material.
 
 use crate::api::client::GraphApiClient;
-use crate::config::{AVD_RESOURCE_SCOPE, RDWEB_FEED_URL, RDWEB_USER_AGENT, WINDOWS_365_BASE_URL};
+use crate::config::{AVD_RESOURCE_SCOPE, RDWEB_USER_AGENT};
 use crate::error::{AppError, Result};
 use crate::models::{
     CloudPc, CloudPcAction, ODataResponse, RemoteActionResult, W365CloudPcItem,
@@ -86,8 +86,9 @@ impl CloudPcService {
     /// Lists the user's Cloud PCs: Windows 365 end-user API v2, then v1, then Graph.
     /// Accounts without a Cloud PC license yield an empty list rather than an error.
     pub async fn list_user_cloud_pcs(&self) -> Result<Vec<CloudPc>> {
+        let base_url = self.client.environment().windows_365_base_url();
         let v2 = format!(
-            "{WINDOWS_365_BASE_URL}/u/api/v2/cloudPCs?extend=IsDefault&licenseCategories=Dedicated,Flex,FrontlineShared"
+            "{base_url}/u/api/v2/cloudPCs?extend=IsDefault&licenseCategories=Dedicated,Flex,FrontlineShared"
         );
         if let Some(body) = self
             .try_get::<Windows365V2Response>(&v2, "Windows 365 v2")
@@ -99,7 +100,7 @@ impl CloudPcService {
             }
         }
 
-        let v1 = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs?extend=IsDefault");
+        let v1 = format!("{base_url}/u/api/v1/cloudPCs?extend=IsDefault");
         if let Some(items) = self
             .try_get::<Vec<W365CloudPcItem>>(&v1, "Windows 365 v1")
             .await
@@ -150,7 +151,8 @@ impl CloudPcService {
     }
 
     pub async fn restart_cloud_pc(&self, id: &str) -> Result<()> {
-        let w365 = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}/reboot");
+        let base_url = self.client.environment().windows_365_base_url();
+        let w365 = format!("{base_url}/u/api/v1/cloudPCs/{id}/reboot");
         match self
             .client
             .send_request(Method::POST, &w365, Some(json!({})))
@@ -171,7 +173,8 @@ impl CloudPcService {
     }
 
     pub async fn rename_cloud_pc(&self, id: &str, new_name: &str) -> Result<()> {
-        let w365 = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}/rename");
+        let base_url = self.client.environment().windows_365_base_url();
+        let w365 = format!("{base_url}/u/api/v1/cloudPCs/{id}/rename");
         match self
             .client
             .send_request(
@@ -200,7 +203,8 @@ impl CloudPcService {
 
     /// Current state of one Cloud PC (status, last action result, …).
     pub async fn get_cloud_pc(&self, id: &str) -> Result<CloudPc> {
-        let url = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}");
+        let base_url = self.client.environment().windows_365_base_url();
+        let url = format!("{base_url}/u/api/v1/cloudPCs/{id}");
         let item: W365CloudPcItem = self.client.get_json(&url).await?;
         Ok(CloudPc::from(item))
     }
@@ -213,7 +217,8 @@ impl CloudPcService {
         verb: &str,
         body: serde_json::Value,
     ) -> Result<()> {
-        let url = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}/{verb}");
+        let base_url = self.client.environment().windows_365_base_url();
+        let url = format!("{base_url}/u/api/v1/cloudPCs/{id}/{verb}");
         let res = self
             .client
             .send_request(Method::POST, &url, Some(body))
@@ -234,7 +239,8 @@ impl CloudPcService {
 
     /// Restore points the user can return to, newest first.
     pub async fn list_snapshots(&self, id: &str) -> Result<Vec<Snapshot>> {
-        let url = format!("{WINDOWS_365_BASE_URL}/u/api/v1/cloudPCs/{id}/snapshots");
+        let base_url = self.client.environment().windows_365_base_url();
+        let url = format!("{base_url}/u/api/v1/cloudPCs/{id}/snapshots");
         let mut list: SnapshotList = self.client.get_json(&url).await?;
         list.snapshots
             .sort_by(|a, b| b.created_date_time.cmp(&a.created_date_time));
@@ -306,9 +312,9 @@ impl CloudPcService {
     /// Downloads the signed `.rdp` file for `pc` and obtains an AVD gateway token.
     pub async fn fetch_rdp_launch(&self, pc: &CloudPc) -> Result<RdpLaunch> {
         let (tenant_id, resource_id) = launch_ids(pc)?;
-        let rdp_url = format!(
-            "{RDWEB_FEED_URL}/tenants/{tenant_id}/rdps/{resource_id}.rdp?directLaunch=true"
-        );
+        let rdweb_url = self.client.environment().rdweb_feed_url();
+        let rdp_url =
+            format!("{rdweb_url}/tenants/{tenant_id}/rdps/{resource_id}.rdp?directLaunch=true");
         debug!("Fetching signed RDP file for resource {resource_id}");
         self.fetch_rdp_file(&rdp_url).await
     }

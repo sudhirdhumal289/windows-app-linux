@@ -130,6 +130,7 @@ impl SharedFolder {
 #[serde(default)]
 pub struct AppConfig {
     pub data_boundary: String,
+    pub cloud_environment: CloudEnvironment,
     /// "grid" or "list".
     pub view_mode: String,
     /// Main window sections (e.g. "cloud-pcs", "remote-pcs") the user collapsed.
@@ -162,6 +163,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             data_boundary: "commercial".to_string(),
+            cloud_environment: CloudEnvironment::Commercial,
             view_mode: "grid".to_string(),
             collapsed_sections: Vec::new(),
             auth_profile_index: 0,
