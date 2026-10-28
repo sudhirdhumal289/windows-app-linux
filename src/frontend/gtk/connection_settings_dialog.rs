@@ -208,7 +208,7 @@ pub fn show(parent: &impl IsA<gtk4::Widget>, target: LaunchTarget, name: &str) {
 
     // Tags, Folders & Favorites
     let org_group = adw::PreferencesGroup::builder()
-        .title("Organization & Tags")
+        .title("Organization &amp; Tags")
         .build();
     let folder_row = adw::EntryRow::builder()
         .title("Folder / Category (e.g. Production, Lab)")

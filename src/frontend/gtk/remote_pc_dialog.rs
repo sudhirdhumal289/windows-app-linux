@@ -82,7 +82,7 @@ pub fn show(
         .active(base.remember_password)
         .build();
     let sign_in = adw::PreferencesGroup::builder()
-        .title("Sign-in & Organization")
+        .title("Sign-in &amp; Organization")
         .build();
     sign_in.add(&domain_row);
     sign_in.add(&group_row);
