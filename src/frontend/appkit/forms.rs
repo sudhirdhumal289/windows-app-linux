@@ -632,6 +632,9 @@ pub(super) fn connection_settings(app: &Rc<App>, target: LaunchTarget, name: &st
         };
         let [clipboard, audio, microphone, camera, drives, printers, smartcard] = &toggles;
         let mut overrides = ConnectionOverrides {
+            is_favorite: current.is_favorite,
+            tags: current.tags.clone(),
+            folder: current.folder.clone(),
             resolution,
             graphics_mode: graphics.value(),
             quality: quality.value(),

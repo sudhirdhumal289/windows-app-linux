@@ -184,7 +184,7 @@ pub fn set_window_icon(hwnd: HWND) {
         let cy_big = GetSystemMetrics(SM_CYICON);
         if let Ok(handle) = LoadImageW(
             Some(instance.into()),
-            PCWSTR(1 as *const u16),
+            PCWSTR(std::ptr::dangling::<u16>()),
             IMAGE_ICON,
             cx_big,
             cy_big,
@@ -202,7 +202,7 @@ pub fn set_window_icon(hwnd: HWND) {
         let cy_small = GetSystemMetrics(SM_CYSMICON);
         if let Ok(handle) = LoadImageW(
             Some(instance.into()),
-            PCWSTR(1 as *const u16),
+            PCWSTR(std::ptr::dangling::<u16>()),
             IMAGE_ICON,
             cx_small,
             cy_small,

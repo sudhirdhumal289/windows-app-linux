@@ -107,7 +107,7 @@ pub fn item_menu(item: &Item, busy: bool) -> Vec<windows_reactor::MenuItem> {
 
 /// The action behind a menu label from [`item_menu`].
 pub fn action_from_label(label: &str) -> Option<ItemAction> {
-    const ACTIONS: [ItemAction; 19] = [
+    const ACTIONS: [ItemAction; 20] = [
         ItemAction::Connect,
         ItemAction::Start,
         ItemAction::Stop,
@@ -192,10 +192,9 @@ fn favorite_button(ctx: &ViewContext<MainApp>, card: &CardView) -> View {
     Button::new()
         .style(ButtonStyle::Subtle)
         .vertical_alignment(VerticalAlignment::Top)
+        .on_click(ctx.callback(move |()| Msg::ToggleFavorite(target.clone())))
         .content(FontIcon::new().glyph(glyph))
         .tooltip(tip)
-        .on_click(ctx.callback(move |()| Msg::ToggleFavorite(target.clone())))
-        .into()
 }
 
 fn more_button(ctx: &ViewContext<MainApp>, card: &CardView) -> View {
@@ -547,7 +546,6 @@ pub fn account_button(
                     .vertical_alignment(VerticalAlignment::Center)
                     .keyed_children(texts),
             ))
-            .into()
     } else {
         person_picture.into()
     };
@@ -560,7 +558,6 @@ pub fn account_button(
             .margin(Thickness::xy(4.0, 4.0))
             .content(content)
             .menu(Menu::new(menu, ctx.callback(Msg::AccountMenu)))
-            .into()
     } else {
         Button::new()
             .style(ButtonStyle::Subtle)
@@ -572,6 +569,5 @@ pub fn account_button(
             .height(40.0)
             .content(content)
             .menu(Menu::new(menu, ctx.callback(Msg::AccountMenu)))
-            .into()
     }
 }

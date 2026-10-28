@@ -580,13 +580,12 @@ fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Sess
             }
         };
 
-        let current_scale = session.borrow().controller.scale_choice();
-        let mon_scale = session_window::window_dpi_scale(parent_hwnd);
-        let items = scale_menu(current_scale, mon_scale);
+        let current_scale = session.borrow().controller.scale();
+        let items = scale_menu(current_scale);
 
         for (i, item) in items.iter().enumerate() {
             let mut flags = MF_STRING;
-            if item.is_active {
+            if item.checked {
                 flags |= MF_CHECKED;
             }
             let label = HSTRING::from(&item.label);
@@ -612,11 +611,8 @@ fn show_scale_menu(dock_hwnd: HWND, parent_hwnd: HWND, session: &Rc<RefCell<Sess
         let chosen = chosen.0 as usize;
         if (1000..1000 + items.len()).contains(&chosen) {
             let item = &items[chosen - 1000];
-            session
-                .borrow_mut()
-                .controller
-                .set_scale_choice(item.choice);
-            session_window::rebuild_menu(parent_hwnd, session);
+            session.borrow_mut().controller.set_scale(item.choice);
+            session_window::resize_now(parent_hwnd, session);
         }
     }
 }
@@ -781,10 +777,10 @@ fn paint_dock(hwnd: HWND) {
             let is_hovered = hovered == Some(btn);
 
             if is_hovered {
-                let hover_color = if btn == DockButton::Disconnect {
+                let hover_color = if btn == DockButton::Disconnect
+                    || (btn == DockButton::Mic && crate::platform::audio::is_mic_muted())
+                {
                     COLORREF(0x1C2BC4) // Soft red BGR
-                } else if btn == DockButton::Mic && crate::platform::audio::is_mic_muted() {
-                    COLORREF(0x1C2BC4) // Muted mic red BGR
                 } else {
                     COLORREF(0x383838) // Hover gray
                 };

@@ -212,13 +212,9 @@ mod os {
         None
     }
 
-    pub fn set_mic_muted(muted: bool) {
+    pub fn set_mic_muted(_muted: bool) {
         // Toggle system mic mute using PowerShell WScript keystroke simulation
-        let script = if muted {
-            "$w = New-Object -ComObject WScript.Shell; $w.SendKeys([char]173)"
-        } else {
-            "$w = New-Object -ComObject WScript.Shell; $w.SendKeys([char]173)"
-        };
+        let script = "$w = New-Object -ComObject WScript.Shell; $w.SendKeys([char]173)";
         let _ = Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", script])
             .output();

@@ -931,11 +931,11 @@ impl MainApp {
                     log::warn!("Could not update favorite status: {e}");
                 }
                 if let LaunchTarget::RemotePc(id) = target {
-                    if let Ok(mut conns) = SavedConnection::load_all() {
-                        if let Some(c) = conns.iter_mut().find(|c| &c.id == id) {
-                            c.is_favorite = !current;
-                            let _ = c.save();
-                            self.library.remote_pcs = conns;
+                    let conns = ConnectionStore::default().load();
+                    if let Some(mut c) = conns.into_iter().find(|c| &c.id == id) {
+                        c.is_favorite = !current;
+                        if let Ok(updated) = ConnectionStore::default().upsert(c) {
+                            self.library.remote_pcs = updated;
                         }
                     }
                 }
@@ -1465,11 +1465,11 @@ impl Component for MainApp {
                     log::warn!("Could not update favorite status: {e}");
                 }
                 if let LaunchTarget::RemotePc(id) = &target {
-                    if let Ok(mut conns) = SavedConnection::load_all() {
-                        if let Some(c) = conns.iter_mut().find(|c| &c.id == id) {
-                            c.is_favorite = !current;
-                            let _ = c.save();
-                            self.library.remote_pcs = conns;
+                    let conns = ConnectionStore::default().load();
+                    if let Some(mut c) = conns.into_iter().find(|c| &c.id == id) {
+                        c.is_favorite = !current;
+                        if let Ok(updated) = ConnectionStore::default().upsert(c) {
+                            self.library.remote_pcs = updated;
                         }
                     }
                 }

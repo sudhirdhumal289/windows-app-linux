@@ -19,12 +19,12 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, W
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
     DeleteDC, DeleteObject, DrawTextW, EndPaint, EnumDisplayMonitors, FillRect, GetMonitorInfoW,
-    InvalidateRect, MonitorFromWindow, SelectObject, SetBkMode, SetBrushOrgEx, SetStretchBltMode,
-    SetTextColor, StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY,
-    CLIP_DEFAULT_PRECIS, COLORONCOLOR, DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CALCRECT, DT_CENTER,
-    DT_NOPREFIX, DT_WORDBREAK, FW_NORMAL, FW_SEMIBOLD, HALFTONE, HDC, HMONITOR, MONITORINFO,
-    MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    InvalidateRect, MonitorFromWindow, SelectObject, SetBkMode, SetStretchBltMode, SetTextColor,
+    StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS,
+    COLORONCOLOR, DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CALCRECT, DT_CENTER, DT_NOPREFIX,
+    DT_WORDBREAK, FW_NORMAL, FW_SEMIBOLD, HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
+    MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY,
+    TRANSPARENT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
@@ -560,7 +560,9 @@ fn drain(hwnd: HWND, session: &Rc<RefCell<Session>>) {
         match event {
             BridgeEvent::FrameUpdated => {
                 // SAFETY: invalidating our own window.
-                let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+                unsafe {
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                };
             }
             BridgeEvent::Status(_) => status_changed(hwnd, session),
             BridgeEvent::AuthRequired { url } => {
@@ -600,7 +602,9 @@ fn status_changed(hwnd: HWND, session: &Rc<RefCell<Session>>) {
     }
     update_title(hwnd, session);
     // SAFETY: invalidating our own window.
-    let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+    unsafe {
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    };
 }
 
 fn remote_clipboard(hwnd: HWND, content: RemoteClipboard) {
@@ -985,7 +989,9 @@ fn key(
             s.controller.release_input();
             s.show_hud = !s.show_hud;
             drop(s);
-            unsafe { InvalidateRect(hwnd, None, false) };
+            unsafe {
+                let _ = InvalidateRect(Some(hwnd), None, false);
+            };
             return Some(LRESULT(0));
         }
     }

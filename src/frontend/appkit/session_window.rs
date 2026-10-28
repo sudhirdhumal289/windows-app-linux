@@ -525,7 +525,7 @@ impl Session {
         }
     }
 
-    fn toggle_hud(&self) {
+    fn toggle_hud(self: &Rc<Self>) {
         if let Some(text) = self.with_controller(|c| c.diagnostics().format_hud()) {
             self.notice(&format!("Diagnostics:\n{text}"));
         }
