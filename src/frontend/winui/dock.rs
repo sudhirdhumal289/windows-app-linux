@@ -447,7 +447,10 @@ fn handle_button_click(hwnd: HWND, btn: DockButton, scale: f64) {
 
     match btn {
         DockButton::Mic => {
-            let _ = crate::platform::audio::toggle_mic_muted();
+            let muted = crate::platform::audio::toggle_mic_muted();
+            if !muted {
+                crate::platform::audio::ensure_mic_optimal_gain();
+            }
             let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
         }
         DockButton::Volume => {
@@ -510,6 +513,12 @@ fn show_volume_menu(
         };
 
         let current_vol = crate::platform::audio::get_volume();
+        let _ = AppendMenuW(
+            menu,
+            MF_DISABLED | MF_GRAYED,
+            0,
+            &HSTRING::from("Speaker Volume"),
+        );
         let levels = [
             (100, "100%"),
             (75, "75%"),
@@ -523,6 +532,28 @@ fn show_volume_menu(
                 flags |= MF_CHECKED;
             }
             let _ = AppendMenuW(menu, flags, 3000 + vol as usize, &HSTRING::from(label));
+        }
+
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, &HSTRING::new());
+        let _ = AppendMenuW(
+            menu,
+            MF_DISABLED | MF_GRAYED,
+            0,
+            &HSTRING::from("Microphone Gain"),
+        );
+        let current_mic_vol = crate::platform::audio::get_mic_volume();
+        let mic_levels = [
+            (125, "Boosted (125%)"),
+            (100, "100% (Optimal)"),
+            (75, "75%"),
+            (50, "50%"),
+        ];
+        for (gain, label) in mic_levels {
+            let mut flags = MF_STRING;
+            if current_mic_vol == gain || current_mic_vol.abs_diff(gain) < 13 {
+                flags |= MF_CHECKED;
+            }
+            let _ = AppendMenuW(menu, flags, 3100 + gain as usize, &HSTRING::from(label));
         }
 
         let chosen = TrackPopupMenu(
@@ -545,6 +576,10 @@ fn show_volume_menu(
         if (3000..=3100).contains(&chosen) {
             let vol = (chosen - 3000) as u32;
             crate::platform::audio::set_volume(vol);
+            let _ = InvalidateRect(Some(dock_hwnd), None, false);
+        } else if (3101..=3250).contains(&chosen) {
+            let gain = (chosen - 3100) as u32;
+            crate::platform::audio::set_mic_volume(gain);
             let _ = InvalidateRect(Some(dock_hwnd), None, false);
         }
     }

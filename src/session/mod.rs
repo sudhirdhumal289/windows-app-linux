@@ -431,18 +431,23 @@ fn use_graphics_pipeline(target: &Target<'_>, opts: &SessionOptions) -> bool {
 }
 
 /// Audio output/input channel argument. Linux uses PulseAudio (also served by PipeWire);
-/// elsewhere FreeRDP picks the platform backend (WinMM on Windows, Core Audio on macOS).
+/// elsewhere FreeRDP picks the native platform backend (WinMM on Windows, Core Audio on macOS).
+///
+/// For microphone redirection [MS-RDPEAI]:
+/// `format:1` enforces uncompressed raw 16-bit linear PCM (`WAVE_FORMAT_PCM`) across all
+/// platforms (Linux, macOS, and Windows) instead of lossy low-bitrate compression codecs
+/// (e.g. GSM 6.10, ADPCM), which cause severely muffled, quiet, or clipped voice recording.
+/// Dynamic sample-rate negotiation allows native 48 kHz (matching PipeWire and Windows Audio)
+/// and 44.1 kHz capture without resampling attenuation or clock drift.
 fn audio_arg(channel: &str) -> String {
-    if cfg!(target_os = "linux") {
-        if channel == "microphone" {
-            // FreeRDP audio input [MS-RDPEAI] on Linux:
-            // format:1 enforces raw uncompressed 16-bit PCM (WAVE_FORMAT_PCM) instead of
-            // lossy compression codecs (which cause noisy or muffled audio), and rate:44100
-            // aligns with Windows Audio Service to prevent sample-rate resampling jitter.
-            format!("/{channel}:sys:pulse,format:1,rate:44100")
+    if channel == "microphone" {
+        if cfg!(target_os = "linux") {
+            format!("/{channel}:sys:pulse,format:1")
         } else {
-            format!("/{channel}:sys:pulse")
+            format!("/{channel}:format:1")
         }
+    } else if cfg!(target_os = "linux") {
+        format!("/{channel}:sys:pulse")
     } else {
         format!("/{channel}")
     }
@@ -898,6 +903,10 @@ mod tests {
         }
         assert!(args.contains(&audio_arg("sound")));
         assert!(!args.iter().any(|a| a.starts_with("/microphone")));
+
+        let mic_arg = audio_arg("microphone");
+        assert!(mic_arg.contains("/microphone"));
+        assert!(mic_arg.contains("format:1"));
     }
 
     #[test]

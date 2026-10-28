@@ -110,6 +110,7 @@ impl FullscreenDock {
                 btn.set_tooltip_text(Some("Unmute Microphone (Currently Muted)"));
                 btn.add_css_class("warning");
             } else {
+                crate::platform::audio::ensure_mic_optimal_gain();
                 btn.set_icon_name("audio-input-microphone-symbolic");
                 btn.set_tooltip_text(Some("Mute Microphone"));
                 btn.remove_css_class("warning");
@@ -118,6 +119,7 @@ impl FullscreenDock {
         dock_box.append(&mic_button);
 
         let current_vol = crate::platform::audio::get_volume();
+        let current_mic_vol = crate::platform::audio::get_mic_volume();
         let volume_popover = Popover::new();
         let vol_box = Box::new(Orientation::Vertical, 6);
         vol_box.set_margin_top(8);
@@ -125,14 +127,26 @@ impl FullscreenDock {
         vol_box.set_margin_start(12);
         vol_box.set_margin_end(12);
 
-        let vol_label = Label::new(Some(&format!("Volume: {current_vol}%")));
+        let vol_label = Label::new(Some(&format!("Speaker Volume: {current_vol}%")));
         vol_label.add_css_class("heading");
         vol_box.append(&vol_label);
 
         let vol_scale = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 5.0);
         vol_scale.set_value(f64::from(current_vol));
-        vol_scale.set_width_request(140);
+        vol_scale.set_width_request(160);
         vol_box.append(&vol_scale);
+
+        vol_box.append(&Separator::new(Orientation::Horizontal));
+
+        let mic_label = Label::new(Some(&format!("Microphone Gain: {current_mic_vol}%")));
+        mic_label.add_css_class("heading");
+        vol_box.append(&mic_label);
+
+        let mic_scale = Scale::with_range(Orientation::Horizontal, 0.0, 150.0, 5.0);
+        mic_scale.set_value(f64::from(current_mic_vol));
+        mic_scale.set_width_request(160);
+        vol_box.append(&mic_scale);
+
         volume_popover.set_child(Some(&vol_box));
 
         let vol_icon = if current_vol == 0 {
@@ -144,7 +158,7 @@ impl FullscreenDock {
         };
         let volume_button = MenuButton::builder()
             .icon_name(vol_icon)
-            .tooltip_text("Session Volume")
+            .tooltip_text("Audio Controls (Speaker & Mic)")
             .popover(&volume_popover)
             .build();
         volume_button.add_css_class("flat");
@@ -155,7 +169,7 @@ impl FullscreenDock {
             let vol = scale.value().round().clamp(0.0, 100.0) as u32;
             crate::platform::audio::set_volume(vol);
             if let Some(lbl) = vol_label_weak.upgrade() {
-                lbl.set_label(&format!("Volume: {vol}%"));
+                lbl.set_label(&format!("Speaker Volume: {vol}%"));
             }
             if let Some(btn) = vol_btn_weak.upgrade() {
                 let icon = if vol == 0 {
@@ -166,6 +180,15 @@ impl FullscreenDock {
                     "audio-volume-high-symbolic"
                 };
                 btn.set_icon_name(icon);
+            }
+        });
+
+        let mic_label_weak = mic_label.downgrade();
+        mic_scale.connect_value_changed(move |scale| {
+            let gain = scale.value().round().clamp(0.0, 150.0) as u32;
+            crate::platform::audio::set_mic_volume(gain);
+            if let Some(lbl) = mic_label_weak.upgrade() {
+                lbl.set_label(&format!("Microphone Gain: {gain}%"));
             }
         });
         dock_box.append(&volume_button);
