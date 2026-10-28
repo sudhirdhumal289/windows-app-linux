@@ -21,7 +21,7 @@ use gtk4::gdk::{self, Key, ModifierType};
 use gtk4::{
     gio, glib, Box, Button, EventControllerKey, EventControllerLegacy, EventControllerMotion,
     EventControllerScroll, EventControllerScrollFlags, GestureClick, MenuButton, Orientation,
-    Overlay, Spinner,
+    Overlay, Separator, Spinner,
 };
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -1425,8 +1425,8 @@ impl SessionWindow {
         };
         let mut diag = self.diagnostics.borrow_mut();
         diag.set_display(w, h, scale);
-        let text = diag.format_hud();
-        self.hud_label.set_text(&text);
+        let markup = diag.format_pango_hud();
+        self.hud_label.set_markup(&markup);
     }
 
     fn lock_keys(&self) -> LockKeys {
@@ -1538,32 +1538,92 @@ fn scale_item(label: &str, choice: ScaleChoice) -> gio::MenuItem {
     item
 }
 
+thread_local! {
+    static HUD_CSS_INSTALLED: Cell<bool> = const { Cell::new(false) };
+}
+
+fn install_hud_css() {
+    if HUD_CSS_INSTALLED.replace(true) {
+        return;
+    }
+    let Some(display) = gtk4::gdk::Display::default() else {
+        return;
+    };
+    let provider = gtk4::CssProvider::new();
+    provider.load_from_string(
+        r#"
+        .performance-hud {
+            background-color: rgba(15, 23, 42, 0.94);
+            color: #f8fafc;
+            border: 1px solid rgba(148, 163, 184, 0.35);
+            border-radius: 10px;
+            padding: 12px 16px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.85);
+        }
+        .hud-title {
+            font-weight: bold;
+            font-size: 13px;
+            color: #f1f5f9;
+            letter-spacing: 0.3px;
+        }
+        .hud-hint {
+            font-size: 11px;
+            color: #94a3b8;
+            font-family: monospace;
+        }
+        .hud-sep {
+            background-color: rgba(148, 163, 184, 0.25);
+            min-height: 1px;
+            margin-top: 4px;
+            margin-bottom: 6px;
+        }
+        .hud-body {
+            font-family: monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            color: #f8fafc;
+        }
+        "#,
+    );
+    gtk4::style_context_add_provider_for_display(
+        &display,
+        &provider,
+        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+    );
+}
+
 fn hud_card() -> (Box, gtk4::Label) {
-    let card = Box::new(Orientation::Vertical, 6);
+    install_hud_css();
+
+    let card = Box::new(Orientation::Vertical, 4);
     card.set_halign(gtk4::Align::End);
     card.set_valign(gtk4::Align::Start);
     card.set_margin_top(20);
     card.set_margin_end(20);
-    card.add_css_class("card");
+    card.add_css_class("performance-hud");
     card.set_can_target(false);
     card.set_visible(false);
 
-    let header_box = Box::new(Orientation::Horizontal, 8);
+    let header_box = Box::new(Orientation::Horizontal, 12);
     let title = gtk4::Label::new(Some("Performance HUD"));
     title.set_halign(gtk4::Align::Start);
-    title.add_css_class("heading");
+    title.add_css_class("hud-title");
     let hint = gtk4::Label::new(Some("Ctrl+Shift+D"));
     hint.set_halign(gtk4::Align::End);
     hint.set_hexpand(true);
-    hint.add_css_class("dim-label");
+    hint.add_css_class("hud-hint");
     header_box.append(&title);
     header_box.append(&hint);
     card.append(&header_box);
 
+    let sep = Separator::new(Orientation::Horizontal);
+    sep.add_css_class("hud-sep");
+    card.append(&sep);
+
     let label = gtk4::Label::new(None);
     label.set_halign(gtk4::Align::Start);
-    label.add_css_class("monospace");
-    label.set_margin_top(4);
+    label.set_use_markup(true);
+    label.add_css_class("hud-body");
     card.append(&label);
 
     (card, label)

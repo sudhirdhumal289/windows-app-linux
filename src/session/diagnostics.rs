@@ -10,6 +10,12 @@ const RTT_HISTORY_CAPACITY: usize = 16;
 /// Rolling window over which FPS is calculated.
 const FPS_WINDOW_SECS: f32 = 1.0;
 
+fn escape_markup(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionDiagnostics {
     /// Timestamps of recent frame updates.
@@ -192,6 +198,75 @@ impl SessionDiagnostics {
         )
     }
 
+    /// Formats a multi-line HUD readout with rich Pango markup for high-contrast,
+    /// color-coded diagnostics over any remote desktop background.
+    #[must_use]
+    pub fn format_pango_hud(&self) -> String {
+        let fps_color = if self.fps >= 50.0 {
+            "#4ade80"
+        } else if self.fps >= 25.0 {
+            "#facc15"
+        } else {
+            "#f87171"
+        };
+
+        let rtt = self.rtt_ms();
+        let (rtt_text, rtt_color) = if rtt > 0 {
+            let color = if rtt <= 50 {
+                "#4ade80"
+            } else if rtt <= 100 {
+                "#a3e635"
+            } else if rtt <= 200 {
+                "#facc15"
+            } else {
+                "#f87171"
+            };
+            (format!("{rtt} ms"), color)
+        } else {
+            ("measuring…".to_string(), "#94a3b8")
+        };
+        let sparkline = escape_markup(&self.rtt_sparkline());
+
+        let (bw_text, bw_color) = if self.bandwidth_kbps() > 0 {
+            (format!("{:.1} Mbps", self.bandwidth_mbps()), "#38bdf8")
+        } else {
+            ("adaptive".to_string(), "#94a3b8")
+        };
+
+        let loss = self.packet_loss_percent();
+        let loss_color = if loss <= 0.5 {
+            "#4ade80"
+        } else if loss <= 2.5 {
+            "#facc15"
+        } else {
+            "#f87171"
+        };
+
+        let (quality_label, quality_color) = match self.quality() {
+            ConnectionQuality::Excellent => ("Excellent", "#4ade80"),
+            ConnectionQuality::Good => ("Good", "#a3e635"),
+            ConnectionQuality::Fair => ("Fair", "#facc15"),
+            ConnectionQuality::Poor => ("Poor", "#f87171"),
+            ConnectionQuality::Unknown => ("Measuring…", "#94a3b8"),
+        };
+
+        let codec = escape_markup(&self.codec);
+
+        format!(
+            "<span color=\"#94a3b8\">FPS:       </span><span color=\"{fps_color}\"><b>{:.1}</b></span>\n\
+             <span color=\"#94a3b8\">RTT:       </span><span color=\"{rtt_color}\"><b>{rtt_text}</b></span> <span color=\"#c084fc\">[{sparkline}]</span>\n\
+             <span color=\"#94a3b8\">Bandwidth: </span><span color=\"{bw_color}\"><b>{bw_text}</b></span>\n\
+             <span color=\"#94a3b8\">Loss:      </span><span color=\"{loss_color}\"><b>{loss:.1}%</b></span>\n\
+             <span color=\"#94a3b8\">Quality:   </span><span color=\"{quality_color}\"><b>{quality_label}</b></span>\n\
+             <span color=\"#94a3b8\">Display:   </span><span color=\"#f1f5f9\">{}×{} @ {}%</span>\n\
+             <span color=\"#94a3b8\">Codec:     </span><span color=\"#f1f5f9\">{codec}</span>",
+            self.fps,
+            self.resolution.0,
+            self.resolution.1,
+            self.scale,
+        )
+    }
+
     /// Formats a single-line compact HUD readout.
     #[must_use]
     pub fn format_compact(&self) -> String {
@@ -243,5 +318,23 @@ mod tests {
         assert!(hud.contains("FPS:"));
         assert!(hud.contains("RTT: 35 ms"));
         assert!(hud.contains("Bandwidth: 50.0 Mbps"));
+    }
+
+    #[test]
+    fn diagnostics_formats_pango_hud_markup() {
+        let mut diag = SessionDiagnostics::new();
+        diag.set_display(1920, 1080, 100);
+        diag.set_codec("AVC444 <H.264> & RFX");
+        diag.update_network(NetworkStats {
+            average_rtt_ms: 35,
+            base_rtt_ms: 25,
+            bandwidth_kbps: 50_000,
+        });
+        let pango = diag.format_pango_hud();
+        assert!(pango.contains("<span color=\"#94a3b8\">FPS:"));
+        assert!(pango.contains("35 ms"));
+        assert!(pango.contains("50.0 Mbps"));
+        assert!(pango.contains("AVC444 &lt;H.264&gt; &amp; RFX"));
+        assert!(pango.contains("1920×1080 @ 100%"));
     }
 }
