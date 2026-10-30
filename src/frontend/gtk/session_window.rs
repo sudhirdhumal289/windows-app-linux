@@ -72,6 +72,8 @@ pub struct SessionWindow {
     bridge: RefCell<Option<Rc<NativeRdpBridge>>>,
     /// Owns the private `.rdp` file for the lifetime of the session.
     session: RefCell<Option<PreparedSession>>,
+    session_args: RefCell<Vec<String>>,
+    login_hint: RefCell<Option<String>>,
     /// Remote desktop scale for this session only; never persisted.
     scale: Cell<ScaleChoice>,
     scale_action: gio::SimpleAction,
@@ -188,6 +190,8 @@ impl SessionWindow {
         content.set_content(Some(&toasts));
         window.set_content(Some(&content));
 
+        let session_args = session.args.clone();
+        let login_hint = options.login_hint.clone();
         let this = Rc::new(Self {
             window: window.clone(),
             name: name.to_string(),
@@ -199,7 +203,9 @@ impl SessionWindow {
             loading,
             loading_label,
             bridge: RefCell::new(None),
-            session: RefCell::new(None),
+            session: RefCell::new(Some(session)),
+            session_args: RefCell::new(session_args),
+            login_hint: RefCell::new(login_hint),
             scale: Cell::new(ScaleChoice::Auto),
             scale_action: gio::SimpleAction::new_stateful(
                 "scale",
@@ -250,7 +256,7 @@ impl SessionWindow {
         this.install_monitor_tracking();
         this.install_frame_renderer();
 
-        this.start(session, options.login_hint);
+        this.start_connection();
 
         window.present();
         this.track_placement();
@@ -349,19 +355,15 @@ impl SessionWindow {
         self.bridge.borrow().clone()
     }
 
-    fn start(self: &Rc<Self>, session: PreparedSession, login_hint: Option<String>) {
+    fn start_connection(self: &Rc<Self>) {
+        let args = self.session_args.borrow().clone();
+        let login_hint = self.login_hint.borrow().clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<BridgeEvent>();
         let sink = Arc::new(move |event| {
             let _ = tx.send(event);
         });
         let options = BridgeOptions { login_hint };
-        let bridge = NativeRdpBridge::new(&session.args, options, sink);
-        // The engine has copied the arguments (which may include a password).
-        let session = PreparedSession {
-            args: Vec::new(),
-            ..session
-        };
-        let bridge = match bridge {
+        let bridge = match NativeRdpBridge::new(&args, options, sink) {
             Ok(bridge) => Rc::new(bridge),
             Err(e) => {
                 log::error!("Could not create the RDP session: {e}");
@@ -369,7 +371,6 @@ impl SessionWindow {
                 return;
             }
         };
-        *self.session.borrow_mut() = Some(session);
         *self.bridge.borrow_mut() = Some(Rc::clone(&bridge));
 
         let weak = Rc::downgrade(self);
@@ -385,6 +386,25 @@ impl SessionWindow {
             log::error!("{e}");
             self.show_ended(&e.to_string());
         }
+    }
+
+    fn reconnect(self: &Rc<Self>) {
+        if self.bridge.borrow().is_some() {
+            return;
+        }
+        if let Some(content) = self.window.content().and_downcast::<adw::ToolbarView>() {
+            content.set_content(Some(&self.toasts));
+        }
+        self.loading_label.set_text("Reconnecting…");
+        self.loading.set_visible(true);
+        self.title.set_subtitle("Connecting…");
+        self.has_frame.set(false);
+        self.frame_dirty.set(false);
+        *self.texture.borrow_mut() = None;
+        for image in &self.quality_icons {
+            image.set_visible(false);
+        }
+        self.start_connection();
     }
 
     fn handle_event(self: &Rc<Self>, event: BridgeEvent) {
@@ -631,8 +651,8 @@ impl SessionWindow {
         }
     }
 
-    /// Shows why the session is over; the window stays open until the user closes it.
-    fn show_ended(&self, message: &str) {
+    /// Shows why the session is over; the window stays open until the user closes it or reconnects.
+    fn show_ended(self: &Rc<Self>, message: &str) {
         let message = if message.is_empty() {
             "Disconnected"
         } else {
@@ -651,6 +671,24 @@ impl SessionWindow {
             .title("Session Ended")
             .description(glib::markup_escape_text(message).as_str())
             .build();
+
+        let buttons_box = Box::new(Orientation::Horizontal, 12);
+        buttons_box.set_halign(gtk4::Align::Center);
+
+        let reconnect = Button::builder()
+            .label("Reconnect")
+            .icon_name("view-refresh-symbolic")
+            .halign(gtk4::Align::Center)
+            .build();
+        reconnect.add_css_class("suggested-action");
+        reconnect.add_css_class("pill");
+        let weak = Rc::downgrade(self);
+        reconnect.connect_clicked(move |_| {
+            if let Some(this) = weak.upgrade() {
+                this.reconnect();
+            }
+        });
+
         let close = Button::builder()
             .label("Close")
             .halign(gtk4::Align::Center)
@@ -662,11 +700,15 @@ impl SessionWindow {
                 window.close();
             }
         });
-        page.set_child(Some(&close));
+
+        buttons_box.append(&reconnect);
+        buttons_box.append(&close);
+        page.set_child(Some(&buttons_box));
+
         if let Some(content) = self.window.content().and_downcast::<adw::ToolbarView>() {
             content.set_content(Some(&page));
         }
-        // Disconnect in the background; no further events are needed.
+        // Disconnect the bridge in the background; session and args are preserved for Reconnect.
         self.bridge.borrow_mut().take();
     }
 
@@ -778,6 +820,7 @@ impl SessionWindow {
         self.close_screens();
         self.bridge.borrow_mut().take();
         self.session.borrow_mut().take();
+        self.session_args.borrow_mut().clear();
         // Pasting copies the files elsewhere, so the downloads are no longer needed; files
         // still on the clipboard can no longer be fetched anyway.
         let local = self.window.clipboard();

@@ -775,6 +775,16 @@ static BOOL bridge_pre_connect(freerdp* instance) {
     if (!freerdp_settings_set_bool(instance->context->settings, FreeRDP_UnicodeInput, TRUE)) {
         WLog_Print(bridge_log(), WLOG_WARN, "Failed to enable UnicodeInput");
     }
+    /* Keepalive and heartbeat to prevent middleboxes/gateways from dropping idle connections */
+    if (!freerdp_settings_set_bool(instance->context->settings, FreeRDP_SupportHeartbeatPdu, TRUE)) {
+        WLog_Print(bridge_log(), WLOG_WARN, "Failed to enable SupportHeartbeatPdu");
+    }
+    if (!freerdp_settings_set_bool(instance->context->settings, FreeRDP_TcpKeepAlive, TRUE)) {
+        WLog_Print(bridge_log(), WLOG_WARN, "Failed to enable TcpKeepAlive");
+    }
+    freerdp_settings_set_uint32(instance->context->settings, FreeRDP_TcpKeepAliveDelay, 30);
+    freerdp_settings_set_uint32(instance->context->settings, FreeRDP_TcpKeepAliveInterval, 10);
+    freerdp_settings_set_uint32(instance->context->settings, FreeRDP_TcpKeepAliveRetries, 3);
     return freerdp_client_load_channels(instance);
 }
 
