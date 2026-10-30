@@ -112,6 +112,11 @@ pub struct SessionWindow {
     /// The saved placement has been applied, so the current one can be recorded.
     placement_restored: Cell<bool>,
     on_close: RefCell<Option<std::boxed::Box<dyn FnOnce()>>>,
+    keep_alive_enabled: Cell<bool>,
+    keep_alive_method: String,
+    keep_alive_interval: Duration,
+    last_user_activity: Cell<std::time::Instant>,
+    keep_alive_timer: RefCell<Option<glib::SourceId>>,
 }
 
 impl SessionWindow {
@@ -192,6 +197,7 @@ impl SessionWindow {
 
         let session_args = session.args.clone();
         let login_hint = options.login_hint.clone();
+        let config = crate::config::AppConfig::load();
         let this = Rc::new(Self {
             window: window.clone(),
             name: name.to_string(),
@@ -243,6 +249,11 @@ impl SessionWindow {
             placement_key: options.remember_placement,
             placement_restored: Cell::new(false),
             on_close: RefCell::new(Some(std::boxed::Box::new(on_close))),
+            keep_alive_enabled: Cell::new(config.keep_alive_enabled),
+            keep_alive_interval: config.keep_alive_interval(),
+            keep_alive_method: config.keep_alive_method,
+            last_user_activity: Cell::new(std::time::Instant::now()),
+            keep_alive_timer: RefCell::new(None),
         });
 
         open_sessions::register(&this.window, name);
@@ -392,6 +403,7 @@ impl SessionWindow {
         if self.bridge.borrow().is_some() {
             return;
         }
+        self.stop_keep_alive();
         if let Some(content) = self.window.content().and_downcast::<adw::ToolbarView>() {
             content.set_content(Some(&self.toasts));
         }
@@ -644,6 +656,7 @@ impl SessionWindow {
                 // The initial size was a guess; match the window now.
                 self.schedule_resize();
                 self.sync_local_clipboard();
+                self.start_keep_alive();
             }
             SessionStatus::Failed(message) | SessionStatus::Ended(message) => {
                 self.show_ended(&message);
@@ -653,6 +666,7 @@ impl SessionWindow {
 
     /// Shows why the session is over; the window stays open until the user closes it or reconnects.
     fn show_ended(self: &Rc<Self>, message: &str) {
+        self.stop_keep_alive();
         let message = if message.is_empty() {
             "Disconnected"
         } else {
@@ -813,6 +827,7 @@ impl SessionWindow {
     /// Disconnects and notifies the owner. Safe to call more than once.
     fn shutdown(&self) {
         self.save_placement();
+        self.stop_keep_alive();
         if let Some(id) = self.resize_timer.take() {
             id.remove();
         }
@@ -838,6 +853,57 @@ impl SessionWindow {
             on_close();
         }
         open_sessions::unregister(&self.window);
+    }
+
+    fn start_keep_alive(self: &Rc<Self>) {
+        if !self.keep_alive_enabled.get() {
+            return;
+        }
+        self.stop_keep_alive();
+        self.last_user_activity.set(std::time::Instant::now());
+
+        let check_interval = Duration::from_secs(5)
+            .min(self.keep_alive_interval / 2)
+            .max(Duration::from_secs(1));
+        let weak = Rc::downgrade(self);
+        let id = glib::timeout_add_local(check_interval, move || {
+            let Some(this) = weak.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if !this.keep_alive_enabled.get() {
+                return glib::ControlFlow::Break;
+            }
+            if this.bridge().is_none() {
+                return glib::ControlFlow::Continue;
+            }
+            if this.last_user_activity.get().elapsed() >= this.keep_alive_interval {
+                this.fabricate_keep_alive();
+                this.last_user_activity.set(std::time::Instant::now());
+            }
+            glib::ControlFlow::Continue
+        });
+        *self.keep_alive_timer.borrow_mut() = Some(id);
+    }
+
+    fn stop_keep_alive(&self) {
+        if let Some(id) = self.keep_alive_timer.borrow_mut().take() {
+            id.remove();
+        }
+    }
+
+    fn fabricate_keep_alive(&self) {
+        let Some(bridge) = self.bridge() else { return };
+        if self.keep_alive_method == crate::config::KEEP_ALIVE_METHOD_KEYPRESS {
+            log::debug!("Fabricating keep-alive keypress event (F15)");
+            bridge.send_key(0x66, true, false);
+            bridge.send_key(0x66, false, false);
+        } else {
+            log::debug!("Fabricating keep-alive mouse movement event");
+            let (x, y) = self.pointer.get();
+            let nudge_x = if x == 0 { x + 1 } else { x - 1 };
+            bridge.send_pointer_move(nudge_x, y);
+            bridge.send_pointer_move(x, y);
+        }
     }
 
     fn schedule_resize(self: &Rc<Self>) {
@@ -1150,6 +1216,7 @@ impl SessionWindow {
             let (Some(this), Some(canvas)) = (weak.upgrade(), canvas_weak.upgrade()) else {
                 return;
             };
+            this.last_user_activity.set(std::time::Instant::now());
             if this.view_only.get() {
                 return;
             }
@@ -1170,6 +1237,7 @@ impl SessionWindow {
             let Some(this) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            this.last_user_activity.set(std::time::Instant::now());
             let down = match event.event_type() {
                 gdk::EventType::ButtonPress => true,
                 gdk::EventType::ButtonRelease => false,
@@ -1198,6 +1266,7 @@ impl SessionWindow {
             let Some(this) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            this.last_user_activity.set(std::time::Instant::now());
             if this.view_only.get() {
                 return glib::Propagation::Stop;
             }
@@ -1232,6 +1301,7 @@ impl SessionWindow {
             let Some(this) = weak.upgrade() else {
                 return glib::Propagation::Proceed;
             };
+            this.last_user_activity.set(std::time::Instant::now());
             if this.local_ui_has_keyboard() {
                 return glib::Propagation::Proceed;
             }
@@ -1250,6 +1320,7 @@ impl SessionWindow {
         let weak = Rc::downgrade(self);
         keys.connect_key_released(move |_, _, keycode, _| {
             if let Some(this) = weak.upgrade() {
+                this.last_user_activity.set(std::time::Instant::now());
                 // Releases still go out so keys pressed before a menu opened don't stick.
                 this.send_key(keycode, false);
             }
@@ -1420,6 +1491,27 @@ impl SessionWindow {
             }
         });
         group.add_action(&type_clipboard);
+
+        let keep_alive = gio::SimpleAction::new_stateful(
+            "keep-alive",
+            None,
+            &self.keep_alive_enabled.get().to_variant(),
+        );
+        let weak = Rc::downgrade(self);
+        keep_alive.connect_change_state(move |action, value| {
+            let (Some(this), Some(enabled)) = (weak.upgrade(), value.and_then(|v| v.get::<bool>()))
+            else {
+                return;
+            };
+            action.set_state(&enabled.to_variant());
+            this.keep_alive_enabled.set(enabled);
+            if enabled {
+                this.start_keep_alive();
+            } else {
+                this.stop_keep_alive();
+            }
+        });
+        group.add_action(&keep_alive);
 
         self.window.insert_action_group("session", Some(&group));
     }
@@ -1633,6 +1725,7 @@ fn session_menu() -> gio::Menu {
         Some("session.capture-shortcuts"),
     );
     toggles.append(Some("View Only"), Some("session.view-only"));
+    toggles.append(Some("Keep Alive (Prevent Idle)"), Some("session.keep-alive"));
     let menu = gio::Menu::new();
     menu.append_section(Some("Send Keys"), &keys);
     menu.append_section(None, &tools);

@@ -124,6 +124,20 @@ impl SharedFolder {
     }
 }
 
+/// Simulated activity method for session keep-alive.
+pub const KEEP_ALIVE_METHOD_MOUSE: &str = "mouse";
+pub const KEEP_ALIVE_METHOD_KEYPRESS: &str = "keypress";
+
+/// Available keep-alive intervals in seconds and their display labels.
+pub const KEEP_ALIVE_INTERVALS: [(u32, &str); 6] = [
+    (30, "Every 30 seconds"),
+    (60, "Every 1 minute"),
+    (120, "Every 2 minutes"),
+    (180, "Every 3 minutes (recommended)"),
+    (300, "Every 5 minutes"),
+    (600, "Every 10 minutes"),
+];
+
 /// Persisted user preferences. Unknown keys from older versions are ignored and missing
 /// keys take their default, so configuration files stay forward and backward compatible.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -159,6 +173,12 @@ pub struct AppConfig {
     pub enable_printers: bool,
     pub timezone: String,
     pub location: String,
+    /// Keep-alive simulation to prevent idle disconnection and host screen lock.
+    pub keep_alive_enabled: bool,
+    /// Simulated activity method: "mouse" (subtle cursor wiggle) or "keypress" (harmless F15 key).
+    pub keep_alive_method: String,
+    /// How frequently to simulate activity in seconds (default: 180s = 3 minutes).
+    pub keep_alive_interval_secs: u32,
 }
 
 impl Default for AppConfig {
@@ -187,6 +207,9 @@ impl Default for AppConfig {
             enable_printers: false,
             timezone: "sync".to_string(),
             location: "sync".to_string(),
+            keep_alive_enabled: false,
+            keep_alive_method: KEEP_ALIVE_METHOD_MOUSE.to_string(),
+            keep_alive_interval_secs: 180,
         }
     }
 }
@@ -234,6 +257,12 @@ impl AppConfig {
         AuthProfile::from_index(self.auth_profile_index)
     }
 
+    /// Keep-alive interval as a `Duration`.
+    #[must_use]
+    pub fn keep_alive_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(u64::from(self.keep_alive_interval_secs.max(10)))
+    }
+
     /// Removes files written by older releases that are no longer used. `credentials.json`
     /// held a plaintext password and must not linger on disk.
     pub fn remove_legacy_files() {
@@ -263,6 +292,13 @@ mod tests {
         assert_eq!(cfg.auth_profile(), AuthProfile::LegacyAvd);
         assert!(!cfg.enable_audio);
         assert!(cfg.enable_clipboard);
+        assert!(!cfg.keep_alive_enabled);
+        assert_eq!(cfg.keep_alive_method, KEEP_ALIVE_METHOD_MOUSE);
+        assert_eq!(cfg.keep_alive_interval_secs, 180);
+        assert_eq!(
+            cfg.keep_alive_interval(),
+            std::time::Duration::from_secs(180)
+        );
     }
 
     #[test]
@@ -281,6 +317,24 @@ mod tests {
         ] {
             assert!(!bad.is_valid(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn keep_alive_config_round_trips_and_clamps() {
+        let mut cfg = AppConfig::default();
+        cfg.keep_alive_enabled = true;
+        cfg.keep_alive_method = KEEP_ALIVE_METHOD_KEYPRESS.to_string();
+        cfg.keep_alive_interval_secs = 60;
+        let json = serde_json::to_string(&cfg).unwrap();
+        let loaded: AppConfig = serde_json::from_str(&json).unwrap();
+        assert!(loaded.keep_alive_enabled);
+        assert_eq!(loaded.keep_alive_method, KEEP_ALIVE_METHOD_KEYPRESS);
+        assert_eq!(loaded.keep_alive_interval_secs, 60);
+        assert_eq!(loaded.keep_alive_interval(), std::time::Duration::from_secs(60));
+
+        let mut clamped = AppConfig::default();
+        clamped.keep_alive_interval_secs = 2; // below minimum 10
+        assert_eq!(clamped.keep_alive_interval(), std::time::Duration::from_secs(10));
     }
 
     #[test]

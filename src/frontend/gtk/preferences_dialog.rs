@@ -117,6 +117,60 @@ impl PreferencesDialog {
         });
         let init_workspaces = helper_state.is_some_and(HelperState::is_enabled);
 
+        // Session Keep-Alive
+        let keep_alive_group = adw::PreferencesGroup::builder()
+            .title("Session Keep-Alive")
+            .description(
+                "Simulate periodic user activity to prevent idle disconnects and screen locks.",
+            )
+            .build();
+        let keep_alive_row = Self::switch_row(
+            "Prevent Idle Disconnection",
+            Some("Simulate activity when no user input is detected"),
+            config.keep_alive_enabled,
+        );
+        keep_alive_group.add(&keep_alive_row);
+
+        let method_labels = [
+            "Mouse Movement (subtle cursor wiggle)",
+            "Keypress (harmless F15 key)",
+        ];
+        let selected_method =
+            if config.keep_alive_method == crate::config::KEEP_ALIVE_METHOD_KEYPRESS {
+                1
+            } else {
+                0
+            };
+        let keep_alive_method_row =
+            Self::combo_row("Activity Method", &method_labels, selected_method);
+        keep_alive_method_row.set_subtitle("Type of event to simulate when idle");
+        keep_alive_method_row.set_sensitive(config.keep_alive_enabled);
+        keep_alive_group.add(&keep_alive_method_row);
+
+        let interval_labels: Vec<&str> = crate::config::KEEP_ALIVE_INTERVALS
+            .iter()
+            .map(|(_, l)| *l)
+            .collect();
+        let selected_interval = crate::config::KEEP_ALIVE_INTERVALS
+            .iter()
+            .position(|(secs, _)| *secs == config.keep_alive_interval_secs)
+            .unwrap_or(3) as u32;
+        let keep_alive_interval_row =
+            Self::combo_row("Trigger Frequency", &interval_labels, selected_interval);
+        keep_alive_interval_row
+            .set_subtitle("How often to simulate activity while the session is idle");
+        keep_alive_interval_row.set_sensitive(config.keep_alive_enabled);
+        keep_alive_group.add(&keep_alive_interval_row);
+        page.add(&keep_alive_group);
+
+        let kam_row = keep_alive_method_row.clone();
+        let kai_row = keep_alive_interval_row.clone();
+        keep_alive_row.connect_active_notify(move |row| {
+            let active = row.is_active();
+            kam_row.set_sensitive(active);
+            kai_row.set_sensitive(active);
+        });
+
         // Section 2: Peripherals & Redirection
         let periph_group = adw::PreferencesGroup::builder()
             .title("Peripherals &amp; Redirection")
@@ -303,6 +357,9 @@ impl PreferencesDialog {
         let init_printers = config.enable_printers;
         let init_hotplug = config.hotplug_drives;
         let init_extra = config.extra_folders.clone();
+        let init_keep_alive = config.keep_alive_enabled;
+        let init_method = selected_method;
+        let init_interval = selected_interval;
 
         let check_dirty = {
             let save_btn = save_btn.clone();
@@ -327,6 +384,9 @@ impl PreferencesDialog {
             let ws = workspace_row.clone();
             let tz_r = timezone_row.clone();
             let loc_r = location_row.clone();
+            let ka = keep_alive_row.clone();
+            let kam = keep_alive_method_row.clone();
+            let kai = keep_alive_interval_row.clone();
             Rc::new(move || {
                 let dirty = p_row.selected() != selected_profile
                     || e_row.selected() != init_env
@@ -346,6 +406,9 @@ impl PreferencesDialog {
                     || loc_r.selected() != init_loc
                     || hp.is_active() != init_hotplug
                     || *extra.borrow() != init_extra
+                    || ka.is_active() != init_keep_alive
+                    || kam.selected() != init_method
+                    || kai.selected() != init_interval
                     || ws
                         .as_ref()
                         .is_some_and(|ws| ws.is_active() != init_workspaces);
@@ -365,6 +428,10 @@ impl PreferencesDialog {
         timezone_row.connect_selected_notify(move |_| cd());
         let cd = Rc::clone(&check_dirty);
         location_row.connect_selected_notify(move |_| cd());
+        let cd = Rc::clone(&check_dirty);
+        keep_alive_method_row.connect_selected_notify(move |_| cd());
+        let cd = Rc::clone(&check_dirty);
+        keep_alive_interval_row.connect_selected_notify(move |_| cd());
         for row in [
             &hotplug_row,
             &clipboard_row,
@@ -374,6 +441,7 @@ impl PreferencesDialog {
             &multimon_row,
             &smartcard_row,
             &printer_row,
+            &keep_alive_row,
         ]
         .into_iter()
         .chain(workspace_row.as_ref())
@@ -501,6 +569,15 @@ impl PreferencesDialog {
                 .get(location_row.selected() as usize)
                 .map(|(id, _, _, _)| (*id).to_string())
                 .unwrap_or_else(|| "sync".to_string());
+            updated_config.keep_alive_enabled = keep_alive_row.is_active();
+            updated_config.keep_alive_method = if keep_alive_method_row.selected() == 1 {
+                crate::config::KEEP_ALIVE_METHOD_KEYPRESS.to_string()
+            } else {
+                crate::config::KEEP_ALIVE_METHOD_MOUSE.to_string()
+            };
+            updated_config.keep_alive_interval_secs = crate::config::KEEP_ALIVE_INTERVALS
+                .get(keep_alive_interval_row.selected() as usize)
+                .map_or(180, |(secs, _)| *secs);
 
             if let Err(e) = updated_config.save() {
                 log::warn!("Failed to save configuration: {e}");
