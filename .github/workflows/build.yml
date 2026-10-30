@@ -57,7 +57,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # build.rs automatically downloads the pinned prebuilt FreeRDP SDK in packaging/windows/freerdp-sdk.txt
       - run: cargo clippy --no-default-features --features winui
-      - run: cargo test --lib --no-default-features --features winui
+      - name: Run Windows unit tests
+        shell: pwsh
+        run: |
+          $output = cargo test --lib --no-default-features --features winui -- --nocapture 2>&1
+          $code = $LASTEXITCODE
+          $output | Out-Host
+          if ($code -ne 0) {
+            $summary = ($output | Out-String)
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Windows Unit Test Failure`n``````n$summary`n``````"
+            exit $code
+          }
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress

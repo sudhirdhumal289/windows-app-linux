@@ -308,6 +308,9 @@ pub fn match_windows_timezone(name: &str) -> Option<&'static str> {
     if trimmed.is_empty() {
         return None;
     }
+    if trimmed.eq_ignore_ascii_case("Coordinated Universal Time") {
+        return Some("UTC");
+    }
     if let Some((id, _)) = COMMON_TIMEZONES
         .iter()
         .find(|(id, _)| id.eq_ignore_ascii_case(trimmed))
