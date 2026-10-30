@@ -1,6 +1,6 @@
 # Maintainer: Windows App Contributors
 pkgname=windows-app
-pkgver=0.2.4
+pkgver=0.2.5
 pkgrel=1
 pkgdesc="Native client for Windows 365, Azure Virtual Desktop and Remote Desktop"
 arch=('x86_64')
