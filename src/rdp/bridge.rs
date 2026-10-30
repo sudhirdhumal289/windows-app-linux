@@ -60,7 +60,10 @@ pub enum BridgeEvent {
     /// Custom remote cursor bitmap sent by the session host.
     CursorBitmap(CursorBitmap),
     /// Remote cursor position updated by the guest OS.
-    CursorPosition { x: u32, y: u32 },
+    CursorPosition {
+        x: u32,
+        y: u32,
+    },
 }
 
 /// Custom cursor image decoded from guest OS pointer updates.

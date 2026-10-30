@@ -1725,7 +1725,10 @@ fn session_menu() -> gio::Menu {
         Some("session.capture-shortcuts"),
     );
     toggles.append(Some("View Only"), Some("session.view-only"));
-    toggles.append(Some("Keep Alive (Prevent Idle)"), Some("session.keep-alive"));
+    toggles.append(
+        Some("Keep Alive (Prevent Idle)"),
+        Some("session.keep-alive"),
+    );
     let menu = gio::Menu::new();
     menu.append_section(Some("Send Keys"), &keys);
     menu.append_section(None, &tools);

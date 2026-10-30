@@ -321,20 +321,30 @@ mod tests {
 
     #[test]
     fn keep_alive_config_round_trips_and_clamps() {
-        let mut cfg = AppConfig::default();
-        cfg.keep_alive_enabled = true;
-        cfg.keep_alive_method = KEEP_ALIVE_METHOD_KEYPRESS.to_string();
-        cfg.keep_alive_interval_secs = 60;
+        let cfg = AppConfig {
+            keep_alive_enabled: true,
+            keep_alive_method: KEEP_ALIVE_METHOD_KEYPRESS.to_string(),
+            keep_alive_interval_secs: 60,
+            ..Default::default()
+        };
         let json = serde_json::to_string(&cfg).unwrap();
         let loaded: AppConfig = serde_json::from_str(&json).unwrap();
         assert!(loaded.keep_alive_enabled);
         assert_eq!(loaded.keep_alive_method, KEEP_ALIVE_METHOD_KEYPRESS);
         assert_eq!(loaded.keep_alive_interval_secs, 60);
-        assert_eq!(loaded.keep_alive_interval(), std::time::Duration::from_secs(60));
+        assert_eq!(
+            loaded.keep_alive_interval(),
+            std::time::Duration::from_secs(60)
+        );
 
-        let mut clamped = AppConfig::default();
-        clamped.keep_alive_interval_secs = 2; // below minimum 10
-        assert_eq!(clamped.keep_alive_interval(), std::time::Duration::from_secs(10));
+        let clamped = AppConfig {
+            keep_alive_interval_secs: 2, // below minimum 10
+            ..Default::default()
+        };
+        assert_eq!(
+            clamped.keep_alive_interval(),
+            std::time::Duration::from_secs(10)
+        );
     }
 
     #[test]

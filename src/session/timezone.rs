@@ -135,30 +135,119 @@ pub fn offset_to_windows_timezone(offset_seconds: i32) -> Option<&'static str> {
         -14400 => Some("Atlantic Standard Time"),       // -04:00
         -12600 => Some("Newfoundland Standard Time"),   // -03:30
         -10800 => Some("Argentina Standard Time"),      // -03:00
+        -7200 => Some("UTC-02"),                        // -02:00
+        -3600 => Some("Cape Verde Standard Time"),      // -01:00
         0 => Some("UTC"),                               // +00:00
         3600 => Some("W. Europe Standard Time"),        // +01:00
         7200 => Some("FLE Standard Time"),              // +02:00
         10800 => Some("Russian Standard Time"),         // +03:00
         12600 => Some("Iran Standard Time"),            // +03:30
         14400 => Some("Arabian Standard Time"),         // +04:00
+        16200 => Some("Afghanistan Standard Time"),     // +04:30
         18000 => Some("Pakistan Standard Time"),        // +05:00
         19800 => Some("India Standard Time"),           // +05:30
         20700 => Some("Nepal Standard Time"),           // +05:45
         21600 => Some("Bangladesh Standard Time"),      // +06:00
+        23400 => Some("Myanmar Standard Time"),         // +06:30
         25200 => Some("SE Asia Standard Time"),         // +07:00
         28800 => Some("China Standard Time"),           // +08:00
         32400 => Some("Tokyo Standard Time"),           // +09:00
         34200 => Some("Cen. Australia Standard Time"),  // +09:30
         36000 => Some("AUS Eastern Standard Time"),     // +10:00
+        37800 => Some("Lord Howe Standard Time"),       // +10:30
         39600 => Some("Central Pacific Standard Time"), // +11:00
+        41400 => Some("Norfolk Standard Time"),         // +11:30
         43200 => Some("New Zealand Standard Time"),     // +12:00
+        45900 => Some("Chatham Islands Standard Time"), // +12:45
+        46800 => Some("Tonga Standard Time"),           // +13:00
+        50400 => Some("Line Islands Standard Time"),    // +14:00
         _ => None,
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod windows_tz {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct SystemTime {
+        w_year: u16,
+        w_month: u16,
+        w_day_of_week: u16,
+        w_day: u16,
+        w_hour: u16,
+        w_minute: u16,
+        w_second: u16,
+        w_milliseconds: u16,
+    }
+
+    #[repr(C)]
+    struct DynamicTimeZoneInformation {
+        bias: i32,
+        standard_name: [u16; 32],
+        standard_date: SystemTime,
+        standard_bias: i32,
+        daylight_name: [u16; 32],
+        daylight_date: SystemTime,
+        daylight_bias: i32,
+        time_zone_key_name: [u16; 128],
+        dynamic_daylight_time_disabled: u8,
+    }
+
+    extern "system" {
+        fn GetDynamicTimeZoneInformation(
+            p_time_zone_information: *mut DynamicTimeZoneInformation,
+        ) -> u32;
+    }
+
+    pub fn get_native_timezone() -> Option<String> {
+        let mut info = std::mem::MaybeUninit::<DynamicTimeZoneInformation>::zeroed();
+        let res = unsafe { GetDynamicTimeZoneInformation(info.as_mut_ptr()) };
+        if res == 0xFFFF_FFFF {
+            return None;
+        }
+        let info = unsafe { info.assume_init() };
+        let key_len = info
+            .time_zone_key_name
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(info.time_zone_key_name.len());
+        if key_len > 0 {
+            if let Ok(key) = String::from_utf16(&info.time_zone_key_name[..key_len]) {
+                let trimmed = key.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        let std_len = info
+            .standard_name
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(info.standard_name.len());
+        if std_len > 0 {
+            if let Ok(name) = String::from_utf16(&info.standard_name[..std_len]) {
+                let trimmed = name.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        None
     }
 }
 
 /// Detects the current system's Windows Standard Time Zone name.
 #[must_use]
 pub fn current_windows_timezone() -> Option<&'static str> {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(native_name) = windows_tz::get_native_timezone() {
+            if let Some(matched) = match_windows_timezone(&native_name) {
+                return Some(matched);
+            }
+        }
+    }
+
     if let Ok(iana) = iana_time_zone::get_timezone() {
         if let Some(win_tz) = iana_to_windows_timezone(&iana) {
             return Some(win_tz);
@@ -166,7 +255,11 @@ pub fn current_windows_timezone() -> Option<&'static str> {
     }
     // Fallback based on system local time offset
     let offset_secs = chrono::Local::now().offset().local_minus_utc();
-    offset_to_windows_timezone(offset_secs)
+    if let Some(win_tz) = offset_to_windows_timezone(offset_secs) {
+        return Some(win_tz);
+    }
+    // Ultimate fallback if neither IANA nor offset could be matched
+    Some("UTC")
 }
 
 pub const SYNC_HOST_TIMEZONE: &str = "sync";
@@ -179,18 +272,196 @@ pub const COMMON_TIMEZONES: &[(&str, &str)] = &[
     ("Mountain Standard Time", "Mountain Time (US & Canada)"),
     ("Pacific Standard Time", "Pacific Time (US & Canada)"),
     ("GMT Standard Time", "GMT (London, Dublin, Lisbon)"),
-    ("W. Europe Standard Time", "Western Europe (Berlin, Paris, Rome)"),
-    ("Central European Standard Time", "Central Europe (Warsaw, Prague)"),
-    ("FLE Standard Time", "Eastern Europe (Helsinki, Athens, Kyiv)"),
+    (
+        "W. Europe Standard Time",
+        "Western Europe (Berlin, Paris, Rome)",
+    ),
+    (
+        "Central European Standard Time",
+        "Central Europe (Warsaw, Prague)",
+    ),
+    (
+        "FLE Standard Time",
+        "Eastern Europe (Helsinki, Athens, Kyiv)",
+    ),
     ("Israel Standard Time", "Israel (Jerusalem, Tel Aviv)"),
     ("Arabic Standard Time", "Arabia (Riyadh, Kuwait)"),
     ("Arabian Standard Time", "Gulf (Dubai, Muscat)"),
     ("India Standard Time", "India (New Delhi, Mumbai, Kolkata)"),
     ("SE Asia Standard Time", "SE Asia (Bangkok, Jakarta)"),
-    ("China Standard Time", "China (Beijing, Shanghai, Hong Kong)"),
+    (
+        "China Standard Time",
+        "China (Beijing, Shanghai, Hong Kong)",
+    ),
     ("Tokyo Standard Time", "Japan (Tokyo, Osaka)"),
     ("AUS Eastern Standard Time", "Australia (Sydney, Melbourne)"),
-    ("New Zealand Standard Time", "New Zealand (Auckland, Wellington)"),
+    (
+        "New Zealand Standard Time",
+        "New Zealand (Auckland, Wellington)",
+    ),
+];
+
+/// Matches a string case-insensitively against known Windows time zone names.
+#[must_use]
+pub fn match_windows_timezone(name: &str) -> Option<&'static str> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some((id, _)) = COMMON_TIMEZONES
+        .iter()
+        .find(|(id, _)| id.eq_ignore_ascii_case(trimmed))
+    {
+        return Some(id);
+    }
+    ALL_WINDOWS_TIMEZONES
+        .iter()
+        .copied()
+        .find(|&tz| tz.eq_ignore_ascii_case(trimmed))
+}
+
+/// Comprehensive list of standard Windows Time Zone names.
+pub const ALL_WINDOWS_TIMEZONES: &[&str] = &[
+    "Dateline Standard Time",
+    "UTC-11",
+    "Aleutian Standard Time",
+    "Hawaiian Standard Time",
+    "Marquesas Standard Time",
+    "Alaskan Standard Time",
+    "UTC-09",
+    "Pacific Standard Time (Mexico)",
+    "UTC-08",
+    "Pacific Standard Time",
+    "US Mountain Standard Time",
+    "Mountain Standard Time (Mexico)",
+    "Mountain Standard Time",
+    "Yukon Standard Time",
+    "Central America Standard Time",
+    "Central Standard Time",
+    "Easter Island Standard Time",
+    "Central Standard Time (Mexico)",
+    "Canada Central Standard Time",
+    "SA Pacific Standard Time",
+    "Eastern Standard Time (Mexico)",
+    "Eastern Standard Time",
+    "Haiti Standard Time",
+    "Cuba Standard Time",
+    "US Eastern Standard Time",
+    "Turks And Caicos Standard Time",
+    "Paraguay Standard Time",
+    "Atlantic Standard Time",
+    "Venezuela Standard Time",
+    "Central Brazilian Standard Time",
+    "SA Western Standard Time",
+    "Pacific SA Standard Time",
+    "Newfoundland Standard Time",
+    "Tocantins Standard Time",
+    "E. South America Standard Time",
+    "SA Eastern Standard Time",
+    "Argentina Standard Time",
+    "Greenland Standard Time",
+    "Montevideo Standard Time",
+    "Magallanes Standard Time",
+    "Saint Pierre Standard Time",
+    "Bahia Standard Time",
+    "UTC-02",
+    "Mid-Atlantic Standard Time",
+    "Azores Standard Time",
+    "Cape Verde Standard Time",
+    "UTC",
+    "GMT Standard Time",
+    "Greenwich Standard Time",
+    "Sao Tome Standard Time",
+    "Morocco Standard Time",
+    "W. Europe Standard Time",
+    "Central Europe Standard Time",
+    "Romance Standard Time",
+    "Central European Standard Time",
+    "W. Central Africa Standard Time",
+    "Jordan Standard Time",
+    "GTB Standard Time",
+    "Middle East Standard Time",
+    "Egypt Standard Time",
+    "E. Europe Standard Time",
+    "Syria Standard Time",
+    "West Bank Standard Time",
+    "South Africa Standard Time",
+    "FLE Standard Time",
+    "Israel Standard Time",
+    "South Sudan Standard Time",
+    "Kaliningrad Standard Time",
+    "Sudan Standard Time",
+    "Libya Standard Time",
+    "Namibia Standard Time",
+    "Arabic Standard Time",
+    "Turkey Standard Time",
+    "Arab Standard Time",
+    "Belarus Standard Time",
+    "Russian Standard Time",
+    "E. Africa Standard Time",
+    "Iran Standard Time",
+    "Arabian Standard Time",
+    "Astrakhan Standard Time",
+    "Azerbaijan Standard Time",
+    "Russia Time Zone 3",
+    "Mauritius Standard Time",
+    "Saratov Standard Time",
+    "Georgian Standard Time",
+    "Volgograd Standard Time",
+    "Caucasus Standard Time",
+    "Afghanistan Standard Time",
+    "West Asia Standard Time",
+    "Ekaterinburg Standard Time",
+    "Pakistan Standard Time",
+    "Qyzylorda Standard Time",
+    "India Standard Time",
+    "Sri Lanka Standard Time",
+    "Nepal Standard Time",
+    "Central Asia Standard Time",
+    "Bangladesh Standard Time",
+    "Omsk Standard Time",
+    "Myanmar Standard Time",
+    "SE Asia Standard Time",
+    "Altai Standard Time",
+    "W. Mongolia Standard Time",
+    "North Asia Standard Time",
+    "N. Central Asia Standard Time",
+    "Tomsk Standard Time",
+    "China Standard Time",
+    "North Asia East Standard Time",
+    "Singapore Standard Time",
+    "W. Australia Standard Time",
+    "Taipei Standard Time",
+    "Ulaanbaatar Standard Time",
+    "Aus Central W. Standard Time",
+    "Transbaikal Standard Time",
+    "Tokyo Standard Time",
+    "North Korea Standard Time",
+    "Korea Standard Time",
+    "Yakutsk Standard Time",
+    "Cen. Australia Standard Time",
+    "AUS Central Standard Time",
+    "E. Australia Standard Time",
+    "AUS Eastern Standard Time",
+    "West Pacific Standard Time",
+    "Tasmania Standard Time",
+    "Vladivostok Standard Time",
+    "Lord Howe Standard Time",
+    "Bougainville Standard Time",
+    "Russia Time Zone 10",
+    "Magadan Standard Time",
+    "Norfolk Standard Time",
+    "Sakhalin Standard Time",
+    "Central Pacific Standard Time",
+    "Russia Time Zone 11",
+    "New Zealand Standard Time",
+    "UTC+12",
+    "Fiji Standard Time",
+    "Chatham Islands Standard Time",
+    "UTC+13",
+    "Tonga Standard Time",
+    "Samoa Standard Time",
+    "Line Islands Standard Time",
 ];
 
 /// Resolves the Windows timezone to pass to FreeRDP based on user preference.
@@ -205,13 +476,7 @@ pub fn resolve_windows_timezone(preference: &str) -> Option<&'static str> {
     } else if let Some(tz) = iana_to_windows_timezone(trimmed) {
         Some(tz)
     } else {
-        COMMON_TIMEZONES.iter().find_map(|(id, _)| {
-            if id.eq_ignore_ascii_case(trimmed) {
-                Some(*id)
-            } else {
-                None
-            }
-        })
+        match_windows_timezone(trimmed)
     }
 }
 
@@ -293,5 +558,19 @@ mod tests {
             Some("Eastern Standard Time")
         );
         assert!(resolve_windows_timezone("sync").is_some());
+    }
+
+    #[test]
+    fn matches_known_windows_timezones() {
+        assert_eq!(
+            match_windows_timezone("Pacific Standard Time"),
+            Some("Pacific Standard Time")
+        );
+        assert_eq!(
+            match_windows_timezone("India Standard Time"),
+            Some("India Standard Time")
+        );
+        assert_eq!(match_windows_timezone("UTC"), Some("UTC"));
+        assert_eq!(match_windows_timezone("Nonexistent TZ"), None);
     }
 }

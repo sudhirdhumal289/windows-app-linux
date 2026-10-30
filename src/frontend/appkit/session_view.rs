@@ -21,7 +21,7 @@ use objc2_core_graphics::{
     kCGColorSpaceSRGB, CGBitmapInfo, CGColorRenderingIntent, CGColorSpace, CGContext,
     CGDataProvider, CGImage, CGImageAlphaInfo, CGImageByteOrderInfo, CGInterpolationQuality,
 };
-use objc2_foundation::{NSArray, NSRect, NSSize};
+use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize};
 use std::cell::RefCell;
 use std::ptr::NonNull;
 use std::rc::{Rc, Weak};
@@ -303,53 +303,66 @@ impl SessionView {
             crate::rdp::CursorKind::IBeam => NSCursor::IBeamCursor(),
             crate::rdp::CursorKind::Hand => NSCursor::pointingHandCursor(),
             crate::rdp::CursorKind::Cross => NSCursor::crosshairCursor(),
-            crate::rdp::CursorKind::ResizeNs => NSCursor::resizeUpDownCursor(),
-            crate::rdp::CursorKind::ResizeWe => NSCursor::resizeLeftRightCursor(),
+            crate::rdp::CursorKind::ResizeNs => NSCursor::rowResizeCursor(),
+            crate::rdp::CursorKind::ResizeWe => NSCursor::columnResizeCursor(),
             crate::rdp::CursorKind::NotAllowed => NSCursor::operationNotAllowedCursor(),
             _ => NSCursor::arrowCursor(),
         }
     }
 
     pub(super) fn set_cursor_bitmap(&self, bitmap: crate::rdp::CursorBitmap) {
-        if bitmap.width == 0 || bitmap.height == 0 {
-            return;
-        }
-        let data = CFData::from_buffer(&bitmap.rgba);
-        let Some(provider) = CGDataProvider::from_data(Some(&data)) else {
+        let width = usize::try_from(bitmap.width).ok();
+        let height = usize::try_from(bitmap.height).ok();
+        let (Some(width), Some(height)) = (width, height) else {
             return;
         };
-        let Some(cs) = CGColorSpace::create_with_name(kCGColorSpaceSRGB) else {
+        let stride = match width.checked_mul(4) {
+            Some(s) if s > 0 => s,
+            _ => return,
+        };
+        let len = match stride.checked_mul(height) {
+            Some(l) if bitmap.rgba.len() >= l => l,
+            _ => return,
+        };
+        let data = CFData::from_bytes(&bitmap.rgba[..len]);
+        let Some(provider) = CGDataProvider::with_cf_data(Some(&data)) else {
             return;
         };
-        let bitmap_info = CGBitmapInfo::ByteOrderDefault.bits()
-            | CGImageAlphaInfo::Last.bits();
-        let Some(cg_image) = CGImage::new(
-            bitmap.width as usize,
-            bitmap.height as usize,
-            8,
-            32,
-            (bitmap.width * 4) as usize,
-            Some(&cs),
-            bitmap_info,
-            Some(&provider),
-            None,
-            false,
-            CGColorRenderingIntent::Default,
-        ) else {
+        let Some(space) = CGColorSpace::with_name(Some(unsafe { kCGColorSpaceSRGB })) else {
+            return;
+        };
+        let info = CGBitmapInfo(
+            CGImageAlphaInfo::PremultipliedLast.0 | CGImageByteOrderInfo::Order32Big.0,
+        );
+        let Some(cg_image) = (unsafe {
+            CGImage::new(
+                width,
+                height,
+                8,
+                32,
+                stride,
+                Some(&space),
+                info,
+                Some(&provider),
+                std::ptr::null(),
+                false,
+                CGColorRenderingIntent::RenderingIntentDefault,
+            )
+        }) else {
             return;
         };
         let image = objc2_app_kit::NSImage::initWithCGImage_size(
             objc2_app_kit::NSImage::alloc(),
             &cg_image,
             NSSize {
-                width: bitmap.width as f64,
-                height: bitmap.height as f64,
+                width: width as f64,
+                height: height as f64,
             },
         );
         let cursor = objc2_app_kit::NSCursor::initWithImage_hotSpot(
             objc2_app_kit::NSCursor::alloc(),
             &image,
-            CGPoint {
+            NSPoint {
                 x: bitmap.hot_x as f64,
                 y: bitmap.hot_y as f64,
             },
