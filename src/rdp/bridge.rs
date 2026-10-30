@@ -442,6 +442,21 @@ impl Shared {
     }
 
     fn begin_auth(&self, auth: PendingAuth) {
+        // First try silent token resolution using the active session refresh token (matching Windows WAM)
+        if let Some(silent_req) = auth.try_silent_token_request() {
+            if let Ok(c_body) = CString::new(silent_req) {
+                let provided = self.with_ctx(|ctx| unsafe {
+                    ffi::freerdp_bridge_provide_token_request(ctx, c_body.as_ptr());
+                });
+                if provided.is_some() {
+                    log::info!(
+                        "Silently provided session host token request via stored refresh token"
+                    );
+                    return;
+                }
+            }
+        }
+
         let url = auth.authorize_url(self.options.login_hint.as_deref());
         *lock(&self.pending_auth) = Some(auth);
         (self.sink)(BridgeEvent::AuthRequired { url });

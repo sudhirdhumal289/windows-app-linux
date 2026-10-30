@@ -1,9 +1,12 @@
-//! RDS AAD (Entra ID) authorization-code flow requested by FreeRDP during connect.
+//! RDS AAD (Entra ID) authorization flow requested by FreeRDP during connect.
 //!
-//! FreeRDP asks for an access token for the session host; the frontend shows the
-//! authorize URL in a web view and hands back the redirect URL, from which the token
-//! request body for FreeRDP is built here.
+//! FreeRDP asks for an access token for the session host.
+//! Like Windows WAM / Microsoft.AAD.BrokerPlugin, we first attempt to silently fulfill
+//! the request using the stored refresh token from the active session. If silent
+//! acquisition is unavailable or fails, we fall back to driving the authorization-code flow
+//! in the frontend web view.
 
+use crate::auth::TokenStore;
 const DEFAULT_AVD_CLIENT_ID: &str = "a85cf173-4192-42f8-81fa-777a763e6e2c";
 const AAD_AUTHORIZE_ENDPOINT: &str =
     "https://login.microsoftonline.com/common/oauth2/v2.0/authorize";
@@ -65,6 +68,36 @@ impl PendingAuth {
             body.push_str(req_cnf);
         }
         body
+    }
+
+    /// Attempts to build a silent token request using the stored refresh token from the active session.
+    ///
+    /// Matches Windows WAM (BrokerPlugin) behavior: acquires the session host token in the background
+    /// without interactive browser navigation, avoiding Conditional Access unmanaged browser blocks.
+    pub(crate) fn try_silent_token_request(&self) -> Option<String> {
+        let saved = TokenStore::global().load()?;
+        let refresh_token = saved.refresh_token.as_deref().filter(|rt| !rt.is_empty())?;
+        log::debug!(
+            "Found stored refresh token; attempting silent broker token request for scope {}",
+            self.scope
+        );
+
+        let client_id = saved
+            .client_id
+            .as_deref()
+            .filter(|c| !c.is_empty())
+            .unwrap_or(&self.client_id);
+
+        let mut body = format!(
+            "grant_type=refresh_token&client_id={client_id}&scope={}&refresh_token={}",
+            self.scope,
+            url::form_urlencoded::byte_serialize(refresh_token.as_bytes()).collect::<String>()
+        );
+        if let Some(req_cnf) = &self.req_cnf {
+            body.push_str("&req_cnf=");
+            body.push_str(req_cnf);
+        }
+        Some(body)
     }
 }
 

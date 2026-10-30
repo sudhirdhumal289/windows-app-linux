@@ -131,7 +131,7 @@ pub const RDWEB_USER_AGENT: &str = "WindowsDesktop/1.2.5105.0";
 
 /// Browser identities used by the sign-in profiles.
 pub const UA_WINDOWS_11_WAM: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; WebView/3.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.102 Safari/537.36 Edge/18.22631";
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; WebView/3.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/70.0.3538.102 Safari/537.36 Edge/18.26300";
 pub const UA_LINUX_CHROME: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 pub const UA_MAC_SAFARI: &str =
