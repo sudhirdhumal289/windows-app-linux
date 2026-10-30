@@ -218,6 +218,9 @@ pub fn export(connection: &SavedConnection, overrides: &ConnectionOverrides) -> 
     if let Some(camera) = overrides.camera {
         line("camerastoredirect", 's', &if camera { "*" } else { "" });
     }
+    let loc_pref = overrides.location.as_deref().unwrap_or("sync");
+    let (redirect_loc, _) = crate::session::location::resolve_location(loc_pref);
+    line("redirectlocation", 'i', &u8::from(redirect_loc));
     out
 }
 

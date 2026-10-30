@@ -55,6 +55,40 @@ pub enum BridgeEvent {
     CertificatePrompt(CertificatePrompt),
     /// Latest network measurements with the session host.
     Network(NetworkStats),
+    /// Remote cursor shape changed.
+    Cursor(CursorKind),
+    /// Custom remote cursor bitmap sent by the session host.
+    CursorBitmap(CursorBitmap),
+    /// Remote cursor position updated by the guest OS.
+    CursorPosition { x: u32, y: u32 },
+}
+
+/// Custom cursor image decoded from guest OS pointer updates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorBitmap {
+    pub width: u32,
+    pub height: u32,
+    pub hot_x: u32,
+    pub hot_y: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// Mouse cursor shapes requested by the remote desktop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CursorKind {
+    #[default]
+    Default,
+    Hidden,
+    IBeam,
+    Hand,
+    Wait,
+    Cross,
+    ResizeNs,
+    ResizeWe,
+    ResizeNwse,
+    ResizeNesw,
+    Move,
+    NotAllowed,
 }
 
 /// Server certificate that needs the user's decision.
@@ -959,6 +993,67 @@ extern "C" fn on_network(
     });
 }
 
+extern "C" fn on_cursor(user_data: *mut c_void, cursor_kind: std::ffi::c_int) {
+    guard((), || {
+        // SAFETY: user_data is ours.
+        if let Some(shared) = unsafe { shared_ref(user_data) } {
+            let kind = match cursor_kind {
+                ffi::CURSOR_HIDDEN => CursorKind::Hidden,
+                ffi::CURSOR_IBEAM => CursorKind::IBeam,
+                ffi::CURSOR_HAND => CursorKind::Hand,
+                ffi::CURSOR_WAIT => CursorKind::Wait,
+                ffi::CURSOR_CROSS => CursorKind::Cross,
+                ffi::CURSOR_RESIZE_NS => CursorKind::ResizeNs,
+                ffi::CURSOR_RESIZE_WE => CursorKind::ResizeWe,
+                ffi::CURSOR_RESIZE_NWSE => CursorKind::ResizeNwse,
+                ffi::CURSOR_RESIZE_NESW => CursorKind::ResizeNesw,
+                ffi::CURSOR_MOVE => CursorKind::Move,
+                ffi::CURSOR_NOT_ALLOWED => CursorKind::NotAllowed,
+                ffi::CURSOR_DEFAULT => CursorKind::Default,
+                _ => CursorKind::Default,
+            };
+            (shared.sink)(BridgeEvent::Cursor(kind));
+        }
+    });
+}
+
+extern "C" fn on_cursor_bitmap(
+    user_data: *mut c_void,
+    rgba: *const u8,
+    width: u32,
+    height: u32,
+    hot_x: u32,
+    hot_y: u32,
+) {
+    guard((), || {
+        let (shared, bytes) = unsafe {
+            (
+                shared_ref(user_data),
+                opt_bytes(rgba, (width as usize) * (height as usize) * 4),
+            )
+        };
+        if let Some(shared) = shared {
+            if !bytes.is_empty() {
+                (shared.sink)(BridgeEvent::CursorBitmap(CursorBitmap {
+                    width,
+                    height,
+                    hot_x,
+                    hot_y,
+                    rgba: bytes.to_vec(),
+                }));
+            }
+        }
+    });
+}
+
+extern "C" fn on_pointer_position(user_data: *mut c_void, x: u32, y: u32) {
+    guard((), || {
+        if let Some(shared) = unsafe { shared_ref(user_data) } {
+            (shared.sink)(BridgeEvent::CursorPosition { x, y });
+        }
+    });
+}
+
 extern "C" fn on_clipboard_request(
     user_data: *mut c_void,
     format_id: u32,
@@ -1140,6 +1235,9 @@ impl NativeRdpBridge {
             on_certificate,
             on_file_request,
             on_file_contents,
+            on_cursor,
+            on_cursor_bitmap,
+            on_pointer_position,
             user_data: Arc::as_ptr(&shared).cast_mut().cast(),
         };
 

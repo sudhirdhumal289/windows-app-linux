@@ -85,6 +85,10 @@ pub struct ConnectionOverrides {
     pub smartcard: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_monitor: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timezone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
     /// Shell command run (and awaited) before connecting.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub pre_command: String,
@@ -122,6 +126,12 @@ impl ConnectionOverrides {
         }
         if let Some(quality) = &self.quality {
             config.quality.clone_from(quality);
+        }
+        if let Some(tz) = &self.timezone {
+            config.timezone.clone_from(tz);
+        }
+        if let Some(loc) = &self.location {
+            config.location.clone_from(loc);
         }
         set(&mut config.enable_clipboard, self.clipboard);
         set(&mut config.enable_audio, self.audio);

@@ -578,6 +578,9 @@ fn drain(hwnd: HWND, session: &Rc<RefCell<Session>>) {
             BridgeEvent::Network(stats) => {
                 session.borrow_mut().network = Some(format!("Connection: {}", stats.summary()));
             }
+            BridgeEvent::Cursor(_) => {}
+            BridgeEvent::CursorBitmap(_) => {}
+            BridgeEvent::CursorPosition { .. } => {}
         }
     }
 }

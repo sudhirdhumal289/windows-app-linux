@@ -80,8 +80,14 @@ pub async fn read_local(clipboard: &gdk::Clipboard) -> Option<LocalClipboard> {
         }
     }
     match clipboard.read_text_future().await {
-        Ok(Some(text)) => Some(LocalClipboard::Text(text.to_string())),
-        _ => None,
+        Ok(Some(text)) if !text.is_empty() => Some(LocalClipboard::Text(text.to_string())),
+        _ => {
+            let primary = clipboard.display().primary_clipboard();
+            match primary.read_text_future().await {
+                Ok(Some(text)) if !text.is_empty() => Some(LocalClipboard::Text(text.to_string())),
+                _ => None,
+            }
+        }
     }
 }
 

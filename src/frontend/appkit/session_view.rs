@@ -11,7 +11,7 @@ use objc2::runtime::AnyObject;
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSAppearance, NSAppearanceCustomization, NSAppearanceNameDarkAqua, NSAutoresizingMaskOptions,
-    NSBox, NSBoxType, NSColor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
+    NSBox, NSBoxType, NSColor, NSCursor, NSEvent, NSEventMask, NSEventModifierFlags, NSEventType,
     NSGraphicsContext, NSImageView, NSProgressIndicator, NSProgressIndicatorStyle, NSResponder,
     NSStackView, NSTitlePosition, NSTrackingArea, NSTrackingAreaOptions,
     NSUserInterfaceLayoutOrientation, NSView,
@@ -44,6 +44,7 @@ pub(super) struct ViewIvars {
     image: RefCell<Option<CFRetained<CGImage>>>,
     overlay: RefCell<Option<Retained<NSView>>>,
     key_monitor: RefCell<Option<Retained<AnyObject>>>,
+    cursor_kind: RefCell<crate::rdp::CursorKind>,
 }
 
 define_class!(
@@ -231,6 +232,19 @@ define_class!(
         fn menu_for_event(&self, _event: &NSEvent) -> Option<Retained<objc2_app_kit::NSMenu>> {
             None
         }
+
+        #[unsafe(method(resetCursorRects))]
+        fn reset_cursor_rects(&self) {
+            let cursor = self.current_nscursor();
+            unsafe {
+                let _: () = msg_send![self, addCursorRect: self.bounds(), cursor: &*cursor];
+            }
+        }
+
+        #[unsafe(method(cursorUpdate:))]
+        fn cursor_update(&self, _event: &NSEvent) {
+            self.apply_cursor();
+        }
     }
 );
 
@@ -241,6 +255,7 @@ impl SessionView {
             image: RefCell::new(None),
             overlay: RefCell::new(None),
             key_monitor: RefCell::new(None),
+            cursor_kind: RefCell::new(crate::rdp::CursorKind::Default),
         });
         // SAFETY: NSView's designated initializer takes the frame rectangle.
         let view: Retained<Self> =
@@ -251,6 +266,7 @@ impl SessionView {
                 | NSAutoresizingMaskOptions::ViewHeightSizable,
         );
         let options = NSTrackingAreaOptions::MouseMoved
+            | NSTrackingAreaOptions::CursorUpdate
             | NSTrackingAreaOptions::ActiveInKeyWindow
             | NSTrackingAreaOptions::InVisibleRect;
         // SAFETY: The owner is the view itself, which outlives its tracking areas.
@@ -278,6 +294,90 @@ impl SessionView {
     ) {
         if let Some(session) = self.session() {
             session.with_controller(f);
+        }
+    }
+
+    fn current_nscursor(&self) -> Retained<NSCursor> {
+        let kind = *self.ivars().cursor_kind.borrow();
+        match kind {
+            crate::rdp::CursorKind::IBeam => NSCursor::IBeamCursor(),
+            crate::rdp::CursorKind::Hand => NSCursor::pointingHandCursor(),
+            crate::rdp::CursorKind::Cross => NSCursor::crosshairCursor(),
+            crate::rdp::CursorKind::ResizeNs => NSCursor::resizeUpDownCursor(),
+            crate::rdp::CursorKind::ResizeWe => NSCursor::resizeLeftRightCursor(),
+            crate::rdp::CursorKind::NotAllowed => NSCursor::operationNotAllowedCursor(),
+            _ => NSCursor::arrowCursor(),
+        }
+    }
+
+    pub(super) fn set_cursor_bitmap(&self, bitmap: crate::rdp::CursorBitmap) {
+        if bitmap.width == 0 || bitmap.height == 0 {
+            return;
+        }
+        let data = CFData::from_buffer(&bitmap.rgba);
+        let Some(provider) = CGDataProvider::from_data(Some(&data)) else {
+            return;
+        };
+        let Some(cs) = CGColorSpace::create_with_name(kCGColorSpaceSRGB) else {
+            return;
+        };
+        let bitmap_info = CGBitmapInfo::ByteOrderDefault.bits()
+            | CGImageAlphaInfo::Last.bits();
+        let Some(cg_image) = CGImage::new(
+            bitmap.width as usize,
+            bitmap.height as usize,
+            8,
+            32,
+            (bitmap.width * 4) as usize,
+            Some(&cs),
+            bitmap_info,
+            Some(&provider),
+            None,
+            false,
+            CGColorRenderingIntent::Default,
+        ) else {
+            return;
+        };
+        let image = objc2_app_kit::NSImage::initWithCGImage_size(
+            objc2_app_kit::NSImage::alloc(),
+            &cg_image,
+            NSSize {
+                width: bitmap.width as f64,
+                height: bitmap.height as f64,
+            },
+        );
+        let cursor = objc2_app_kit::NSCursor::initWithImage_hotSpot(
+            objc2_app_kit::NSCursor::alloc(),
+            &image,
+            CGPoint {
+                x: bitmap.hot_x as f64,
+                y: bitmap.hot_y as f64,
+            },
+        );
+        cursor.set();
+    }
+
+    pub(super) fn set_cursor_position(&self, _x: u32, _y: u32) {}
+
+    pub(super) fn set_cursor(&self, kind: crate::rdp::CursorKind) {
+        *self.ivars().cursor_kind.borrow_mut() = kind;
+        self.apply_cursor();
+        if let Some(window) = self.window() {
+            unsafe {
+                let _: () = msg_send![&window, invalidateCursorRectsForView: self];
+            }
+        }
+    }
+
+    fn apply_cursor(&self) {
+        let kind = *self.ivars().cursor_kind.borrow();
+        if kind == crate::rdp::CursorKind::Hidden {
+            unsafe {
+                NSCursor::setHiddenUntilMouseMoves(true);
+            }
+        } else {
+            let cursor = self.current_nscursor();
+            cursor.set();
         }
     }
 

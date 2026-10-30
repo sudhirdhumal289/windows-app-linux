@@ -151,6 +151,32 @@ pub fn show(parent: &impl IsA<gtk4::Widget>, target: LaunchTarget, name: &str) {
     display.add(&quality.row);
     display.add(&multi_monitor.row);
 
+    // Regional: Time Zone & Location
+    let regional = adw::PreferencesGroup::builder()
+        .title("Time Zone & Location")
+        .description("Default uses the value from Preferences.")
+        .build();
+    let timezone = Choice::new(
+        "Time Zone",
+        crate::session::timezone::timezone_label(&config.timezone),
+        crate::session::timezone::COMMON_TIMEZONES
+            .iter()
+            .map(|(id, l)| (id.to_string(), l.to_string()))
+            .collect(),
+        current.timezone.as_ref(),
+    );
+    let location = Choice::new(
+        "Location",
+        crate::session::location::location_label(&config.location),
+        crate::session::location::COMMON_LOCATIONS
+            .iter()
+            .map(|(id, l, _, _)| (id.to_string(), l.to_string()))
+            .collect(),
+        current.location.as_ref(),
+    );
+    regional.add(&timezone.row);
+    regional.add(&location.row);
+
     // Devices.
     let devices = adw::PreferencesGroup::builder()
         .title("Devices")
@@ -231,6 +257,7 @@ pub fn show(parent: &impl IsA<gtk4::Widget>, target: LaunchTarget, name: &str) {
     page.add(&org_group);
     page.add(&display);
     page.add(&devices);
+    page.add(&regional);
     page.add(&commands);
 
     let toolbar_view = adw::ToolbarView::new();
@@ -287,6 +314,8 @@ pub fn show(parent: &impl IsA<gtk4::Widget>, target: LaunchTarget, name: &str) {
             printers: printers.value(),
             smartcard: smartcard.value(),
             multi_monitor: multi_monitor.value(),
+            timezone: timezone.value(),
+            location: location.value(),
             pre_command: pre_row.text().to_string(),
             post_command: post_row.text().to_string(),
         };

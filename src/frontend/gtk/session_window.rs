@@ -431,6 +431,48 @@ impl SessionWindow {
             BridgeEvent::RemoteClipboard(content) => self.set_remote_clipboard(content),
             BridgeEvent::CertificatePrompt(prompt) => self.ask_certificate(&prompt),
             BridgeEvent::Network(stats) => self.show_network(stats),
+            BridgeEvent::Cursor(kind) => {
+                let name = match kind {
+                    crate::rdp::CursorKind::Hidden => "none",
+                    crate::rdp::CursorKind::IBeam => "text",
+                    crate::rdp::CursorKind::Hand => "pointer",
+                    crate::rdp::CursorKind::Wait => "wait",
+                    crate::rdp::CursorKind::Cross => "crosshair",
+                    crate::rdp::CursorKind::ResizeNs => "ns-resize",
+                    crate::rdp::CursorKind::ResizeWe => "ew-resize",
+                    crate::rdp::CursorKind::ResizeNwse => "nwse-resize",
+                    crate::rdp::CursorKind::ResizeNesw => "nesw-resize",
+                    crate::rdp::CursorKind::Move => "move",
+                    crate::rdp::CursorKind::NotAllowed => "not-allowed",
+                    crate::rdp::CursorKind::Default => "default",
+                };
+                self.canvas.set_cursor_from_name(Some(name));
+            }
+            BridgeEvent::CursorBitmap(bitmap) => {
+                let expected = (bitmap.width as usize)
+                    .checked_mul(bitmap.height as usize)
+                    .and_then(|n| n.checked_mul(4));
+                if bitmap.width > 0 && bitmap.height > 0 && Some(bitmap.rgba.len()) == expected {
+                    let bytes = gtk4::glib::Bytes::from(&bitmap.rgba);
+                    let texture = gtk4::gdk::MemoryTexture::new(
+                        bitmap.width as i32,
+                        bitmap.height as i32,
+                        gtk4::gdk::MemoryFormat::R8g8b8a8,
+                        &bytes,
+                        (bitmap.width * 4) as usize,
+                    );
+                    let cursor = gtk4::gdk::Cursor::from_texture(
+                        &texture,
+                        bitmap.hot_x as i32,
+                        bitmap.hot_y as i32,
+                        None,
+                    );
+                    self.canvas.set_cursor(Some(&cursor));
+                }
+            }
+            BridgeEvent::CursorPosition { x, y } => {
+                log::trace!("Guest OS mouse position: {x}, {y}");
+            }
         }
     }
 
@@ -438,7 +480,10 @@ impl SessionWindow {
     fn set_remote_clipboard(&self, content: RemoteClipboard) {
         let local = self.window.clipboard();
         match content {
-            RemoteClipboard::Text(text) => local.set_text(&text),
+            RemoteClipboard::Text(text) => {
+                local.set_text(&text);
+                local.display().primary_clipboard().set_text(&text);
+            }
             RemoteClipboard::Image(image) => match clipboard::texture_from_image(&image) {
                 Some(texture) => local.set_texture(&texture),
                 None => log::warn!("Ignoring an invalid clipboard image from the session"),
@@ -1239,6 +1284,12 @@ impl SessionWindow {
                     bridge.send_focus_in(this.lock_keys());
                 }
                 this.sync_local_clipboard();
+                let weak_retry = Rc::downgrade(&this);
+                glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+                    if let Some(this) = weak_retry.upgrade() {
+                        this.sync_local_clipboard();
+                    }
+                });
             } else {
                 // Otherwise e.g. Alt stays held remotely after Alt+Tab.
                 this.release_input();
@@ -1351,21 +1402,35 @@ impl SessionWindow {
     /// not work (sign-in screens, consoles without clipboard support).
     fn type_clipboard(self: &Rc<Self>) {
         let weak = Rc::downgrade(self);
-        self.window
-            .clipboard()
-            .read_text_async(gio::Cancellable::NONE, move |result| {
-                let Some(this) = weak.upgrade() else { return };
-                match result {
-                    Ok(Some(text)) => match keys::type_text(&text) {
-                        Some(inputs) => this.send_inputs(&inputs),
-                        None => this.toast(&format!(
-                            "The clipboard text is too long to type (over {} characters).",
-                            keys::MAX_TYPED_CHARS
-                        )),
-                    },
-                    _ => this.toast("The clipboard holds no text."),
+        let clipboard = self.window.clipboard();
+        clipboard.read_text_async(gio::Cancellable::NONE, move |result| {
+            let Some(this) = weak.upgrade() else { return };
+            match result {
+                Ok(Some(text)) if !text.is_empty() => this.do_type_clipboard(&text),
+                _ => {
+                    let weak2 = Rc::downgrade(&this);
+                    WidgetExt::display(&this.window)
+                        .primary_clipboard()
+                        .read_text_async(gio::Cancellable::NONE, move |res| {
+                            let Some(this) = weak2.upgrade() else { return };
+                            match res {
+                                Ok(Some(text)) if !text.is_empty() => this.do_type_clipboard(&text),
+                                _ => this.toast("The clipboard holds no text."),
+                            }
+                        });
                 }
-            });
+            }
+        });
+    }
+
+    fn do_type_clipboard(&self, text: &str) {
+        match keys::type_text(text) {
+            Some(inputs) => self.send_inputs(&inputs),
+            None => self.toast(&format!(
+                "The clipboard text is too long to type (over {} characters).",
+                keys::MAX_TYPED_CHARS
+            )),
+        }
     }
 
     /// Saves the current remote screen as a PNG in the Pictures folder.

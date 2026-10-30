@@ -108,15 +108,125 @@ impl KeyCombo {
     }
 }
 
-/// Keystrokes that type `text`: Enter and Tab as keys (so they act in any application),
-/// other characters as Unicode input. Carriage returns are dropped (`\r\n` types one
-/// Enter) as are other control characters. Returns `None` when `text` is too long.
+/// Maps standard printable ASCII characters to hardware scancodes and Shift requirement.
+/// This ensures keystrokes are registered by all applications, including consoles,
+/// password fields, and apps that do not consume `WM_CHAR` / `VK_PACKET`.
+fn char_to_scancode(c: char) -> Option<(u32, bool)> {
+    match c {
+        'a'..='z' => Some((
+            match c {
+                'a' => 0x1E,
+                'b' => 0x30,
+                'c' => 0x2E,
+                'd' => 0x20,
+                'e' => 0x12,
+                'f' => 0x21,
+                'g' => 0x22,
+                'h' => 0x23,
+                'i' => 0x17,
+                'j' => 0x24,
+                'k' => 0x25,
+                'l' => 0x26,
+                'm' => 0x32,
+                'n' => 0x31,
+                'o' => 0x18,
+                'p' => 0x19,
+                'q' => 0x10,
+                'r' => 0x13,
+                's' => 0x1F,
+                't' => 0x14,
+                'u' => 0x16,
+                'v' => 0x2F,
+                'w' => 0x11,
+                'x' => 0x2D,
+                'y' => 0x15,
+                'z' => 0x2C,
+                _ => unreachable!(),
+            },
+            false,
+        )),
+        'A'..='Z' => Some((
+            match c {
+                'A' => 0x1E,
+                'B' => 0x30,
+                'C' => 0x2E,
+                'D' => 0x20,
+                'E' => 0x12,
+                'F' => 0x21,
+                'G' => 0x22,
+                'H' => 0x23,
+                'I' => 0x17,
+                'J' => 0x24,
+                'K' => 0x25,
+                'L' => 0x26,
+                'M' => 0x32,
+                'N' => 0x31,
+                'O' => 0x18,
+                'P' => 0x19,
+                'Q' => 0x10,
+                'R' => 0x13,
+                'S' => 0x1F,
+                'T' => 0x14,
+                'U' => 0x16,
+                'V' => 0x2F,
+                'W' => 0x11,
+                'X' => 0x2D,
+                'Y' => 0x15,
+                'Z' => 0x2C,
+                _ => unreachable!(),
+            },
+            true,
+        )),
+        '1'..='9' => Some((0x02 + (c as u32 - '1' as u32), false)),
+        '0' => Some((0x0B, false)),
+        ' ' => Some((0x39, false)),
+        '-' => Some((0x0C, false)),
+        '=' => Some((0x0D, false)),
+        '[' => Some((0x1A, false)),
+        ']' => Some((0x1B, false)),
+        ';' => Some((0x27, false)),
+        '\'' => Some((0x28, false)),
+        '`' => Some((0x29, false)),
+        '\\' => Some((0x2B, false)),
+        ',' => Some((0x33, false)),
+        '.' => Some((0x34, false)),
+        '/' => Some((0x35, false)),
+        // Shifted numbers and symbols:
+        '!' => Some((0x02, true)),
+        '@' => Some((0x03, true)),
+        '#' => Some((0x04, true)),
+        '$' => Some((0x05, true)),
+        '%' => Some((0x06, true)),
+        '^' => Some((0x07, true)),
+        '&' => Some((0x08, true)),
+        '*' => Some((0x09, true)),
+        '(' => Some((0x0A, true)),
+        ')' => Some((0x0B, true)),
+        '_' => Some((0x0C, true)),
+        '+' => Some((0x0D, true)),
+        '{' => Some((0x1A, true)),
+        '}' => Some((0x1B, true)),
+        ':' => Some((0x27, true)),
+        '"' => Some((0x28, true)),
+        '~' => Some((0x29, true)),
+        '|' => Some((0x2B, true)),
+        '<' => Some((0x33, true)),
+        '>' => Some((0x34, true)),
+        '?' => Some((0x35, true)),
+        _ => None,
+    }
+}
+
+/// Keystrokes that type `text`: standard characters as hardware scancodes (so they act
+/// in any application, console or password prompt), other characters as Unicode input.
+/// Carriage returns are dropped (`\r\n` types one Enter) as are other control characters.
+/// Returns `None` when `text` is too long.
 #[must_use]
 pub fn type_text(text: &str) -> Option<Vec<KeyInput>> {
     if text.chars().count() > MAX_TYPED_CHARS {
         return None;
     }
-    let mut events = Vec::with_capacity(text.len() * 2);
+    let mut events = Vec::with_capacity(text.len() * 4);
     let press = |events: &mut Vec<KeyInput>, code| {
         events.push(KeyInput::Scancode { code, down: true });
         events.push(KeyInput::Scancode { code, down: false });
@@ -127,10 +237,27 @@ pub fn type_text(text: &str) -> Option<Vec<KeyInput>> {
             '\t' => press(&mut events, TAB),
             c if c.is_control() => {}
             c => {
-                let mut units = [0u16; 2];
-                for &unit in c.encode_utf16(&mut units).iter() {
-                    events.push(KeyInput::Unicode { unit, down: true });
-                    events.push(KeyInput::Unicode { unit, down: false });
+                if let Some((code, shifted)) = char_to_scancode(c) {
+                    if shifted {
+                        events.push(KeyInput::Scancode {
+                            code: SHIFT,
+                            down: true,
+                        });
+                        events.push(KeyInput::Scancode { code, down: true });
+                        events.push(KeyInput::Scancode { code, down: false });
+                        events.push(KeyInput::Scancode {
+                            code: SHIFT,
+                            down: false,
+                        });
+                    } else {
+                        press(&mut events, code);
+                    }
+                } else {
+                    let mut units = [0u16; 2];
+                    for &unit in c.encode_utf16(&mut units).iter() {
+                        events.push(KeyInput::Unicode { unit, down: true });
+                        events.push(KeyInput::Unicode { unit, down: false });
+                    }
                 }
             }
         }
@@ -170,13 +297,21 @@ mod tests {
     }
 
     #[test]
-    fn types_text_as_unicode_with_real_enter_and_tab() {
+    fn types_text_as_scancodes_and_unicode_with_real_enter_and_tab() {
         let events = type_text("a\r\n\t😀").unwrap();
+        // 'a' is scancode 0x1E
         assert_eq!(
             events[0],
-            KeyInput::Unicode {
-                unit: 'a' as u16,
+            KeyInput::Scancode {
+                code: 0x1E,
                 down: true
+            }
+        );
+        assert_eq!(
+            events[1],
+            KeyInput::Scancode {
+                code: 0x1E,
+                down: false
             }
         );
         assert_eq!(

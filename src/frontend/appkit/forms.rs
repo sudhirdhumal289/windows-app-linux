@@ -646,6 +646,8 @@ pub(super) fn connection_settings(app: &Rc<App>, target: LaunchTarget, name: &st
             printers: printers.value(),
             smartcard: smartcard.value(),
             multi_monitor: multi_monitor.value(),
+            timezone: None,
+            location: None,
             pre_command: pre.stringValue().to_string(),
             post_command: post.stringValue().to_string(),
         };

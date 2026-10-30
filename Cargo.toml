@@ -2,39 +2,17 @@
 name = "windows-app"
 version = "0.2.4"
 edition = "2021"
-authors = ["Sudhir <sudhir@local>"]
-description = "Native client for Windows 365, Azure Virtual Desktop and Remote Desktop built with Rust and FreeRDP 3, with GTK 4 / libadwaita, WinUI 3 and AppKit frontends"
-license = "MIT OR Apache-2.0"
-build = "build.rs"
+authors = ["Sudhir Dhumal <sudhirdhumal289@gmail.com>"]
+description = "Modern, high-performance client for Windows 365 Cloud PCs, Azure Virtual Desktop and Remote Desktop"
+repository = "https://github.com/sudhirdhumal289/windows-app-linux"
+license = "MIT"
+default-run = "windows-app"
 
 [features]
 default = ["gtk"]
-# One native frontend per platform; the core library builds without any of them.
-# GTK 4 / libadwaita / WebKitGTK (Linux).
 gtk = ["dep:gtk4", "dep:adw", "dep:webkit6", "dep:gdk4-x11"]
-# WinUI 3 through windows-reactor, WebView2 sign-in and a Direct3D/Win32 session view
-# (Windows). Build with `--no-default-features --features winui`.
 winui = ["dep:windows-reactor", "dep:windows", "dep:webview2-com"]
-# AppKit through objc2, WKWebView sign-in (macOS). Build with
-# `--no-default-features --features appkit`.
-appkit = [
-    "dep:objc2",
-    "dep:objc2-foundation",
-    "dep:objc2-app-kit",
-    "dep:objc2-web-kit",
-    "dep:objc2-core-graphics",
-    "dep:objc2-core-foundation",
-    "dep:block2",
-    "dep:dispatch2",
-]
-
-[lib]
-name = "windows_app"
-path = "src/lib.rs"
-
-[[bin]]
-name = "windows-app"
-path = "src/main.rs"
+appkit = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", "dep:objc2-web-kit", "dep:objc2-core-graphics", "dep:objc2-core-foundation", "dep:block2", "dep:dispatch2"]
 
 [dependencies]
 # GUI frontend (GTK 4, libadwaita & WebKitGTK 6)
@@ -60,6 +38,7 @@ uuid = { version = "1.8", features = ["v4", "fast-rng"] }
 url = "2.5"
 directories = "5.0"
 chrono = { version = "0.4", features = ["serde"] }
+iana-time-zone = "0.1"
 log = "0.4"
 env_logger = "0.11"
 roxmltree = "0.21"

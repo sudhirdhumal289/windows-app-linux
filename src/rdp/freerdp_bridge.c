@@ -16,10 +16,12 @@
 #include <freerdp/client.h>
 #include <freerdp/client/cliprdr.h>
 #include <freerdp/client/disp.h>
+#include <freerdp/client/location.h>
 #include <freerdp/client/rail.h>
 #include <freerdp/error.h>
 #include <freerdp/event.h>
 #include <freerdp/freerdp.h>
+#include <freerdp/codec/color.h>
 #include <freerdp/gdi/gdi.h>
 #include <freerdp/input.h>
 #include <freerdp/scancode.h>
@@ -171,11 +173,23 @@ typedef struct {
     UINT64 network_polled_at;
     UINT32 network_last[3];
 
-    /* Whether a surface frame is actively being decoded between BEGIN and END markers. */
-    BOOL in_surface_frame;
-
     /* Why the last connection attempt was refused (static string); session thread only. */
     const char* failure_hint;
+
+    /* Frame synchronization (rolling curtain prevention) */
+    BOOL in_frame;
+    BOOL frame_has_damage;
+    INT32 frame_x;
+    INT32 frame_y;
+    INT32 frame_w;
+    INT32 frame_h;
+    pSurfaceFrameMarker default_surface_frame_marker;
+    pPointerSystem default_pointer_system;
+    pPointer_Set default_pointer_set;
+    pPointer_SetDefault default_pointer_set_default;
+    pPointer_SetNull default_pointer_set_null;
+    pPointer_SetPosition default_pointer_set_position;
+    pPointerPosition default_pointer_position;
 } BridgeClientContext;
 
 struct RdpBridgeContext {
@@ -208,8 +222,8 @@ static BOOL bridge_log_message(const wLogMessage* msg) {
         if (g_last_log_error[0] != '\0' &&
             (strstr(text, "error retrieving ARM configuration") != NULL ||
              strstr(text, "Failed to check FreeRDP file format") != NULL)) {
-            char prev[256];
-            (void)snprintf(prev, sizeof(prev), "%s", g_last_log_error);
+            char prev[128];
+            (void)snprintf(prev, sizeof(prev), "%.127s", g_last_log_error);
             (void)snprintf(g_last_log_error, sizeof(g_last_log_error), "%s: %s", text, prev);
         } else {
             (void)snprintf(g_last_log_error, sizeof(g_last_log_error), "%s", text);
@@ -536,36 +550,166 @@ static BOOL bridge_begin_paint(rdpContext* context) {
     return TRUE;
 }
 
-static BOOL bridge_surface_frame_marker(rdpContext* context,
-                                        const SURFACE_FRAME_MARKER* marker) {
-    if (!context || !marker) return TRUE;
+static RdpBridgeCursorKind bridge_map_cursor_system(UINT32 type) {
+    switch (type) {
+        case 0x00000000: /* SYSPTR_NULL */
+            return RDP_BRIDGE_CURSOR_HIDDEN;
+        case 0x00007F01: /* OCR_IBEAM */
+            return RDP_BRIDGE_CURSOR_IBEAM;
+        case 0x00007F89: /* OCR_HAND */
+            return RDP_BRIDGE_CURSOR_HAND;
+        case 0x00007F02: /* OCR_WAIT */
+        case 0x00007F8A: /* OCR_APPSTARTING */
+            return RDP_BRIDGE_CURSOR_WAIT;
+        case 0x00007F03: /* OCR_CROSS */
+            return RDP_BRIDGE_CURSOR_CROSS;
+        case 0x00007F85: /* OCR_SIZENS */
+            return RDP_BRIDGE_CURSOR_RESIZE_NS;
+        case 0x00007F84: /* OCR_SIZEWE */
+            return RDP_BRIDGE_CURSOR_RESIZE_WE;
+        case 0x00007F82: /* OCR_SIZENWSE */
+            return RDP_BRIDGE_CURSOR_RESIZE_NWSE;
+        case 0x00007F83: /* OCR_SIZENESW */
+            return RDP_BRIDGE_CURSOR_RESIZE_NESW;
+        case 0x00007F80: /* OCR_SIZE */
+        case 0x00007F86: /* OCR_SIZEALL */
+            return RDP_BRIDGE_CURSOR_MOVE;
+        case 0x00007F88: /* OCR_NO */
+            return RDP_BRIDGE_CURSOR_NOT_ALLOWED;
+        case 0x00007F00: /* SYSPTR_DEFAULT / OCR_NORMAL */
+        default:
+            return RDP_BRIDGE_CURSOR_DEFAULT;
+    }
+}
+
+static BOOL bridge_pointer_system(rdpContext* context, const POINTER_SYSTEM_UPDATE* pointer_system) {
     BridgeClientContext* bctx = (BridgeClientContext*)context;
-    if (marker->frameAction == SURFACECMD_FRAMEACTION_BEGIN) {
-        bctx->in_surface_frame = TRUE;
-    } else if (marker->frameAction == SURFACECMD_FRAMEACTION_END) {
-        bctx->in_surface_frame = FALSE;
-        rdpGdi* gdi = context->gdi;
-        if (gdi && gdi->primary_buffer && !gdi->suppressOutput) {
-            bridge_emit_frame(bctx, gdi, 0, 0, (INT32)gdi->width, (INT32)gdi->height);
+    if (bctx->default_pointer_system) {
+        bctx->default_pointer_system(context, pointer_system);
+    }
+    if (bctx->cb.on_cursor && pointer_system) {
+        RdpBridgeCursorKind kind = bridge_map_cursor_system(pointer_system->type);
+        bctx->cb.on_cursor(bctx->cb.user_data, (int)kind);
+    }
+    return TRUE;
+}
+
+static BOOL bridge_pointer_set(rdpContext* context, rdpPointer* pointer) {
+    BridgeClientContext* bctx = (BridgeClientContext*)context;
+    if (bctx->default_pointer_set) {
+        bctx->default_pointer_set(context, pointer);
+    }
+    if (bctx->cb.on_cursor_bitmap && pointer && pointer->width > 0 && pointer->height > 0) {
+        size_t size = (size_t)pointer->width * (size_t)pointer->height * 4;
+        BYTE* rgba = (BYTE*)malloc(size ? size : 4);
+        if (rgba) {
+            if (freerdp_image_copy_from_pointer_data(
+                    rgba, PIXEL_FORMAT_RGBA32, pointer->width * 4,
+                    0, 0, pointer->width, pointer->height,
+                    pointer->xorMaskData, pointer->lengthXorMask,
+                    pointer->andMaskData, pointer->lengthAndMask,
+                    pointer->xorBpp, NULL)) {
+                bctx->cb.on_cursor_bitmap(bctx->cb.user_data, rgba, pointer->width,
+                                          pointer->height, pointer->xPos, pointer->yPos);
+            }
+            free(rgba);
         }
     }
     return TRUE;
 }
 
-static BOOL bridge_end_paint(rdpContext* context) {
+static BOOL bridge_pointer_set_default(rdpContext* context) {
     BridgeClientContext* bctx = (BridgeClientContext*)context;
-    if (bctx->in_surface_frame) {
-        /* Defer partial strips/tiles while inside a surface frame;
-         * the complete frame will be emitted at SURFACECMD_FRAMEACTION_END. */
-        return TRUE;
+    if (bctx->default_pointer_set_default) {
+        bctx->default_pointer_set_default(context);
     }
+    if (bctx->cb.on_cursor) {
+        bctx->cb.on_cursor(bctx->cb.user_data, RDP_BRIDGE_CURSOR_DEFAULT);
+    }
+    return TRUE;
+}
+
+static BOOL bridge_pointer_set_null(rdpContext* context) {
+    BridgeClientContext* bctx = (BridgeClientContext*)context;
+    if (bctx->default_pointer_set_null) {
+        bctx->default_pointer_set_null(context);
+    }
+    if (bctx->cb.on_cursor) {
+        bctx->cb.on_cursor(bctx->cb.user_data, RDP_BRIDGE_CURSOR_HIDDEN);
+    }
+    return TRUE;
+}
+
+static BOOL bridge_pointer_position(rdpContext* context, const POINTER_POSITION_UPDATE* pointer_position) {
+    BridgeClientContext* bctx = (BridgeClientContext*)context;
+    if (bctx->default_pointer_position) {
+        bctx->default_pointer_position(context, pointer_position);
+    }
+    if (bctx->cb.on_pointer_position && pointer_position) {
+        bctx->cb.on_pointer_position(bctx->cb.user_data, pointer_position->xPos, pointer_position->yPos);
+    }
+    return TRUE;
+}
+
+static BOOL bridge_surface_frame_marker(rdpContext* context, const SURFACE_FRAME_MARKER* marker) {
+    BridgeClientContext* bctx = (BridgeClientContext*)context;
+    if (!marker) return TRUE;
+
+    if (marker->frameAction == SURFACECMD_FRAMEACTION_BEGIN) {
+        bctx->in_frame = TRUE;
+        bctx->frame_has_damage = FALSE;
+        bctx->frame_x = 0;
+        bctx->frame_y = 0;
+        bctx->frame_w = 0;
+        bctx->frame_h = 0;
+    } else if (marker->frameAction == SURFACECMD_FRAMEACTION_END) {
+        bctx->in_frame = FALSE;
+        if (bctx->frame_has_damage && context->gdi) {
+            bridge_emit_frame(bctx, context->gdi, bctx->frame_x, bctx->frame_y,
+                              bctx->frame_w, bctx->frame_h);
+            bctx->frame_has_damage = FALSE;
+        }
+    }
+
+    if (bctx->default_surface_frame_marker) {
+        return bctx->default_surface_frame_marker(context, marker);
+    }
+    return TRUE;
+}
+
+static BOOL bridge_end_paint(rdpContext* context) {
     rdpGdi* gdi = context->gdi;
     HGDI_WND hwnd = bridge_primary_hwnd(gdi);
     if (!hwnd || !hwnd->invalid || hwnd->invalid->null || gdi->suppressOutput) {
         return TRUE;
     }
     HGDI_RGN r = hwnd->invalid;
-    bridge_emit_frame(bctx, gdi, r->x, r->y, r->w, r->h);
+    BridgeClientContext* bctx = (BridgeClientContext*)context;
+    if (bctx->in_frame) {
+        /* Inside a surface frame: accumulate dirty bounding box, emit only on FRAMEACTION_END */
+        if (!bctx->frame_has_damage) {
+            bctx->frame_x = r->x;
+            bctx->frame_y = r->y;
+            bctx->frame_w = r->w;
+            bctx->frame_h = r->h;
+            bctx->frame_has_damage = TRUE;
+        } else {
+            INT32 x1 = (bctx->frame_x < r->x) ? bctx->frame_x : r->x;
+            INT32 y1 = (bctx->frame_y < r->y) ? bctx->frame_y : r->y;
+            INT32 x2_cur = bctx->frame_x + bctx->frame_w;
+            INT32 x2_new = r->x + r->w;
+            INT32 x2 = (x2_cur > x2_new) ? x2_cur : x2_new;
+            INT32 y2_cur = bctx->frame_y + bctx->frame_h;
+            INT32 y2_new = r->y + r->h;
+            INT32 y2 = (y2_cur > y2_new) ? y2_cur : y2_new;
+            bctx->frame_x = x1;
+            bctx->frame_y = y1;
+            bctx->frame_w = x2 - x1;
+            bctx->frame_h = y2 - y1;
+        }
+    } else {
+        bridge_emit_frame(bctx, gdi, r->x, r->y, r->w, r->h);
+    }
     return TRUE;
 }
 
@@ -605,7 +749,6 @@ static void bridge_check_layout(BridgeClientContext* bctx, UINT32 width, UINT32 
 
 static BOOL bridge_desktop_resize(rdpContext* context) {
     rdpGdi* gdi = context->gdi;
-    ((BridgeClientContext*)context)->in_surface_frame = FALSE;
     if (!gdi || !context->settings) return FALSE;
     UINT32 width = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopWidth);
     UINT32 height = freerdp_settings_get_uint32(context->settings, FreeRDP_DesktopHeight);
@@ -615,8 +758,10 @@ static BOOL bridge_desktop_resize(rdpContext* context) {
         WLog_Print(bridge_log(), WLOG_ERROR, "gdi_resize(%u, %u) failed", width, height);
         return FALSE;
     }
-    bridge_emit_frame((BridgeClientContext*)context, gdi, 0, 0, (INT32)gdi->width,
-                      (INT32)gdi->height);
+    BridgeClientContext* bctx = (BridgeClientContext*)context;
+    bctx->in_frame = FALSE;
+    bctx->frame_has_damage = FALSE;
+    bridge_emit_frame(bctx, gdi, 0, 0, (INT32)gdi->width, (INT32)gdi->height);
     return TRUE;
 }
 
@@ -624,6 +769,12 @@ static BOOL bridge_desktop_resize(rdpContext* context) {
 
 static BOOL bridge_pre_connect(freerdp* instance) {
     /* Codec selection happened in bridge_parse_args(); the GDI renders either path. */
+    if (!freerdp_settings_set_bool(instance->context->settings, FreeRDP_SurfaceFrameMarkerEnabled, TRUE)) {
+        WLog_Print(bridge_log(), WLOG_WARN, "Failed to enable SurfaceFrameMarkerEnabled");
+    }
+    if (!freerdp_settings_set_bool(instance->context->settings, FreeRDP_UnicodeInput, TRUE)) {
+        WLog_Print(bridge_log(), WLOG_WARN, "Failed to enable UnicodeInput");
+    }
     return freerdp_client_load_channels(instance);
 }
 
@@ -636,9 +787,31 @@ static BOOL bridge_post_connect(freerdp* instance) {
     context->update->BeginPaint = bridge_begin_paint;
     context->update->EndPaint = bridge_end_paint;
     context->update->DesktopResize = bridge_desktop_resize;
-    context->update->SurfaceFrameMarker = bridge_surface_frame_marker;
 
     BridgeClientContext* bctx = (BridgeClientContext*)context;
+    bctx->default_surface_frame_marker = context->update->SurfaceFrameMarker;
+    context->update->SurfaceFrameMarker = bridge_surface_frame_marker;
+    bctx->in_frame = FALSE;
+    bctx->frame_has_damage = FALSE;
+
+    if (context->graphics && context->graphics->Pointer_Prototype) {
+        bctx->default_pointer_set = context->graphics->Pointer_Prototype->Set;
+        bctx->default_pointer_set_default = context->graphics->Pointer_Prototype->SetDefault;
+        bctx->default_pointer_set_null = context->graphics->Pointer_Prototype->SetNull;
+        bctx->default_pointer_set_position = context->graphics->Pointer_Prototype->SetPosition;
+
+        context->graphics->Pointer_Prototype->Set = bridge_pointer_set;
+        context->graphics->Pointer_Prototype->SetDefault = bridge_pointer_set_default;
+        context->graphics->Pointer_Prototype->SetNull = bridge_pointer_set_null;
+    }
+
+    if (context->update && context->update->pointer) {
+        bctx->default_pointer_system = context->update->pointer->PointerSystem;
+        bctx->default_pointer_position = context->update->pointer->PointerPosition;
+
+        context->update->pointer->PointerSystem = bridge_pointer_system;
+        context->update->pointer->PointerPosition = bridge_pointer_position;
+    }
     bridge_set_input_ready(bctx, TRUE);
     bridge_status(bctx, RDP_BRIDGE_STATUS_CONNECTED, "Connected");
     /* Pick up a resize requested while (re)connecting. */
@@ -856,7 +1029,8 @@ static DWORD WINAPI bridge_client_thread(LPVOID arg) {
         if (status == WAIT_FAILED || status == WAIT_OBJECT_0 + count) {
             break;
         }
-        if (status == WAIT_OBJECT_0 + count + 1) {
+        if (status == WAIT_OBJECT_0 + count + 1 ||
+            WaitForSingleObject(bctx->work_event, 0) == WAIT_OBJECT_0) {
             bridge_process_work(bctx);
         }
         bridge_poll_network(bctx);
@@ -943,14 +1117,24 @@ static int bridge_clip_rank(UINT32 kind) {
 
 static UINT bridge_cliprdr_server_capabilities(CliprdrClientContext* cliprdr,
                                                const CLIPRDR_CAPABILITIES* capabilities) {
-    (void)capabilities;
+    UINT32 version = CB_CAPS_VERSION_2;
+    if (capabilities && capabilities->cCapabilitiesSets > 0 && capabilities->capabilitySets) {
+        const CLIPRDR_GENERAL_CAPABILITY_SET* server_general =
+            (const CLIPRDR_GENERAL_CAPABILITY_SET*)capabilities->capabilitySets;
+        if (server_general->version < version) {
+            version = server_general->version;
+        }
+    }
     CLIPRDR_GENERAL_CAPABILITY_SET general = { 0 };
     general.capabilitySetType = CB_CAPSTYPE_GENERAL;
     general.capabilitySetLength = CB_CAPSTYPE_GENERAL_LEN;
-    general.version = CB_CAPS_VERSION_2;
+    general.version = version;
     /* FreeRDP drops the flags the host does not support. */
-    general.generalFlags = CB_USE_LONG_FORMAT_NAMES | CB_STREAM_FILECLIP_ENABLED |
-                           CB_FILECLIP_NO_FILE_PATHS | CB_HUGE_FILE_SUPPORT_ENABLED;
+    general.generalFlags = CB_USE_LONG_FORMAT_NAMES;
+    if (version >= CB_CAPS_VERSION_2) {
+        general.generalFlags |= CB_STREAM_FILECLIP_ENABLED | CB_FILECLIP_NO_FILE_PATHS |
+                                CB_HUGE_FILE_SUPPORT_ENABLED;
+    }
 
     CLIPRDR_CAPABILITIES caps = { 0 };
     caps.cCapabilitiesSets = 1;
@@ -1566,7 +1750,7 @@ void freerdp_bridge_send_focus_in(RdpBridgeContext* ctx, uint16_t lock_flags) {
 void freerdp_bridge_send_unicode(RdpBridgeContext* ctx, bool down, uint16_t code_unit) {
     rdpInput* input = bridge_input_begin(ctx);
     if (!input) return;
-    freerdp_input_send_unicode_keyboard_event(input, down ? 0 : KBD_FLAGS_RELEASE, code_unit);
+    freerdp_input_send_unicode_keyboard_event(input, down ? KBD_FLAGS_DOWN : KBD_FLAGS_RELEASE, code_unit);
     bridge_input_end(ctx);
 }
 

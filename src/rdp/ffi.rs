@@ -70,6 +70,31 @@ pub(super) type FileRequestCallback = extern "C" fn(
 pub(super) type FileContentsCallback =
     extern "C" fn(user_data: *mut c_void, stream_id: u32, ok: bool, data: *const u8, len: usize);
 
+/// `RdpBridgeCursorKind`.
+pub(super) const CURSOR_DEFAULT: c_int = 0;
+pub(super) const CURSOR_HIDDEN: c_int = 1;
+pub(super) const CURSOR_IBEAM: c_int = 2;
+pub(super) const CURSOR_HAND: c_int = 3;
+pub(super) const CURSOR_WAIT: c_int = 4;
+pub(super) const CURSOR_CROSS: c_int = 5;
+pub(super) const CURSOR_RESIZE_NS: c_int = 6;
+pub(super) const CURSOR_RESIZE_WE: c_int = 7;
+pub(super) const CURSOR_RESIZE_NWSE: c_int = 8;
+pub(super) const CURSOR_RESIZE_NESW: c_int = 9;
+pub(super) const CURSOR_MOVE: c_int = 10;
+pub(super) const CURSOR_NOT_ALLOWED: c_int = 11;
+
+pub(super) type CursorCallback = extern "C" fn(user_data: *mut c_void, cursor_kind: c_int);
+pub(super) type CursorBitmapCallback = extern "C" fn(
+    user_data: *mut c_void,
+    rgba: *const u8,
+    width: u32,
+    height: u32,
+    hot_x: u32,
+    hot_y: u32,
+);
+pub(super) type PointerPositionCallback = extern "C" fn(user_data: *mut c_void, x: u32, y: u32);
+
 /// `RdpBridgeCertificate`. Strings are NUL-terminated and non-null except
 /// `old_fingerprint`.
 #[repr(C)]
@@ -118,6 +143,9 @@ pub(super) struct RdpBridgeCallbacks {
     pub on_certificate: CertificateCallback,
     pub on_file_request: FileRequestCallback,
     pub on_file_contents: FileContentsCallback,
+    pub on_cursor: CursorCallback,
+    pub on_cursor_bitmap: CursorBitmapCallback,
+    pub on_pointer_position: PointerPositionCallback,
     pub user_data: *mut c_void,
 }
 

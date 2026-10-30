@@ -115,6 +115,28 @@ typedef void (*RdpBridgeCertificateCallback)(void* user_data, const RdpBridgeCer
 typedef void (*RdpBridgeNetworkCallback)(void* user_data, uint32_t average_rtt_ms,
                                          uint32_t base_rtt_ms, uint32_t bandwidth_kbps);
 
+/* Remote mouse pointer shapes */
+typedef enum {
+    RDP_BRIDGE_CURSOR_DEFAULT = 0,
+    RDP_BRIDGE_CURSOR_HIDDEN = 1,
+    RDP_BRIDGE_CURSOR_IBEAM = 2,
+    RDP_BRIDGE_CURSOR_HAND = 3,
+    RDP_BRIDGE_CURSOR_WAIT = 4,
+    RDP_BRIDGE_CURSOR_CROSS = 5,
+    RDP_BRIDGE_CURSOR_RESIZE_NS = 6,
+    RDP_BRIDGE_CURSOR_RESIZE_WE = 7,
+    RDP_BRIDGE_CURSOR_RESIZE_NWSE = 8,
+    RDP_BRIDGE_CURSOR_RESIZE_NESW = 9,
+    RDP_BRIDGE_CURSOR_MOVE = 10,
+    RDP_BRIDGE_CURSOR_NOT_ALLOWED = 11,
+} RdpBridgeCursorKind;
+
+typedef void (*RdpBridgeCursorCallback)(void* user_data, int cursor_kind);
+typedef void (*RdpBridgeCursorBitmapCallback)(void* user_data, const uint8_t* rgba,
+                                             uint32_t width, uint32_t height,
+                                             uint32_t hot_x, uint32_t hot_y);
+typedef void (*RdpBridgePointerPositionCallback)(void* user_data, uint32_t x, uint32_t y);
+
 typedef struct {
     RdpBridgeFrameCallback on_frame;
     RdpBridgeAuthCallback on_auth;
@@ -125,6 +147,9 @@ typedef struct {
     RdpBridgeCertificateCallback on_certificate;
     RdpBridgeFileRequestCallback on_file_request;
     RdpBridgeFileContentsCallback on_file_contents;
+    RdpBridgeCursorCallback on_cursor;
+    RdpBridgeCursorBitmapCallback on_cursor_bitmap;
+    RdpBridgePointerPositionCallback on_pointer_position;
     /* Passed to every callback; must stay valid until freerdp_bridge_free() returns. */
     void* user_data;
 } RdpBridgeCallbacks;

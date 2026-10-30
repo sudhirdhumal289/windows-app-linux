@@ -4,6 +4,8 @@
 
 pub mod diagnostics;
 pub mod keys;
+pub mod location;
+pub mod timezone;
 
 pub use diagnostics::SessionDiagnostics;
 
@@ -156,6 +158,8 @@ pub struct SessionOptions {
     pub usb_devices: Vec<UsbId>,
     pub smartcard: bool,
     pub printers: bool,
+    pub timezone: String,
+    pub location: String,
 }
 
 impl SessionOptions {
@@ -188,6 +192,8 @@ impl SessionOptions {
             usb_devices: usb_devices(config),
             smartcard: config.enable_smartcard,
             printers: config.enable_printers,
+            timezone: config.timezone.clone(),
+            location: config.location.clone(),
         }
     }
 }
@@ -545,6 +551,9 @@ fn build_args(target: &Target<'_>, opts: &SessionOptions) -> Vec<String> {
     if let Some(user) = &opts.username {
         args.push(format!("/u:{user}"));
     }
+    if let Some(tz) = timezone::resolve_windows_timezone(&opts.timezone) {
+        args.push(format!("/timezone:{tz}"));
+    }
     if let Target::Direct {
         credentials: Credentials {
             password: Some(password),
@@ -674,7 +683,16 @@ pub fn sync_rdp_file_content(content: &str, opts: &SessionOptions) -> String {
     }
 
     // Overrides / injections to guarantee alignment with SessionOptions:
-    let desired: [(&str, char, String); 6] = [
+    let desired: [(&str, char, String); 7] = [
+        (
+            "redirectlocation",
+            'i',
+            if location::resolve_location(&opts.location).0 {
+                "1".to_string()
+            } else {
+                "0".to_string()
+            },
+        ),
         (
             "camerastoredirect",
             's',
@@ -873,6 +891,8 @@ mod tests {
             ],
             smartcard: true,
             printers: true,
+            timezone: "sync".into(),
+            location: "sync".into(),
         }
     }
 
@@ -1222,6 +1242,7 @@ mod tests {
         assert_eq!(rdp_property(&synced, "audiocapturemode"), Some("0"));
         assert_eq!(rdp_property(&synced, "audiomode"), Some("0"));
         assert_eq!(rdp_property(&synced, "redirectclipboard"), Some("1"));
+        assert_eq!(rdp_property(&synced, "redirectlocation"), Some("1"));
 
         let mut o = opts();
         o.camera = false;

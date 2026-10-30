@@ -155,6 +155,36 @@ impl PreferencesDialog {
         }
         page.add(&periph_group);
 
+        // Section: Time Zone & Location
+        let tz_loc_group = adw::PreferencesGroup::builder()
+            .title("Time Zone & Location")
+            .description("Configure time zone and location redirection for remote sessions.")
+            .build();
+        let tz_labels: Vec<&str> = crate::session::timezone::COMMON_TIMEZONES
+            .iter()
+            .map(|(_, l)| *l)
+            .collect();
+        let selected_tz = crate::session::timezone::COMMON_TIMEZONES
+            .iter()
+            .position(|(id, _)| id.eq_ignore_ascii_case(&config.timezone))
+            .unwrap_or(0) as u32;
+        let timezone_row = Self::combo_row("Time Zone", &tz_labels, selected_tz);
+        timezone_row.set_subtitle("Time zone reported to the remote desktop");
+        tz_loc_group.add(&timezone_row);
+
+        let loc_labels: Vec<&str> = crate::session::location::COMMON_LOCATIONS
+            .iter()
+            .map(|(_, l, _, _)| *l)
+            .collect();
+        let selected_loc = crate::session::location::COMMON_LOCATIONS
+            .iter()
+            .position(|(id, _, _, _)| id.eq_ignore_ascii_case(&config.location))
+            .unwrap_or(0) as u32;
+        let location_row = Self::combo_row("Location", &loc_labels, selected_loc);
+        location_row.set_subtitle("Location services and coordinates redirected to the session");
+        tz_loc_group.add(&location_row);
+        page.add(&tz_loc_group);
+
         // USB devices
         let usb_group = adw::PreferencesGroup::builder()
             .title("USB Devices")
@@ -266,6 +296,8 @@ impl PreferencesDialog {
         let init_drive_redir = config.enable_drive_redirection;
         let init_shared_path = config.shared_folder_path.clone();
 
+        let init_tz = selected_tz;
+        let init_loc = selected_loc;
         let init_multimon = config.multi_monitor;
         let init_smartcard = config.enable_smartcard;
         let init_printers = config.enable_printers;
@@ -293,6 +325,8 @@ impl PreferencesDialog {
             let hp = hotplug_row.clone();
             let extra = Rc::clone(&extra_folders);
             let ws = workspace_row.clone();
+            let tz_r = timezone_row.clone();
+            let loc_r = location_row.clone();
             Rc::new(move || {
                 let dirty = p_row.selected() != selected_profile
                     || e_row.selected() != init_env
@@ -308,6 +342,8 @@ impl PreferencesDialog {
                     || pr.is_active() != init_printers
                     || *usb.borrow() != init_usb
                     || q.selected() != selected_quality
+                    || tz_r.selected() != init_tz
+                    || loc_r.selected() != init_loc
                     || hp.is_active() != init_hotplug
                     || *extra.borrow() != init_extra
                     || ws
@@ -325,6 +361,10 @@ impl PreferencesDialog {
         graphics_row.connect_selected_notify(move |_| cd());
         let cd = Rc::clone(&check_dirty);
         quality_row.connect_selected_notify(move |_| cd());
+        let cd = Rc::clone(&check_dirty);
+        timezone_row.connect_selected_notify(move |_| cd());
+        let cd = Rc::clone(&check_dirty);
+        location_row.connect_selected_notify(move |_| cd());
         for row in [
             &hotplug_row,
             &clipboard_row,
@@ -453,6 +493,14 @@ impl PreferencesDialog {
             updated_config.hotplug_drives = hotplug_row.is_active();
             updated_config.extra_folders = extra_folders.borrow().clone();
             updated_config.usb_devices = usb_selection.borrow().iter().cloned().collect();
+            updated_config.timezone = crate::session::timezone::COMMON_TIMEZONES
+                .get(timezone_row.selected() as usize)
+                .map(|(id, _)| (*id).to_string())
+                .unwrap_or_else(|| "sync".to_string());
+            updated_config.location = crate::session::location::COMMON_LOCATIONS
+                .get(location_row.selected() as usize)
+                .map(|(id, _, _, _)| (*id).to_string())
+                .unwrap_or_else(|| "sync".to_string());
 
             if let Err(e) = updated_config.save() {
                 log::warn!("Failed to save configuration: {e}");

@@ -92,20 +92,44 @@ pub enum RemoteClipboard {
 }
 
 /// Encodes local clipboard text for a CLIPRDR format (NUL-terminated, as Windows expects).
+/// Windows applications expect CRLF line endings on the clipboard; standalone `\n` is normalized to `\r\n`.
 pub(crate) fn encode_clipboard_text(text: &str, format_id: u32) -> Option<Vec<u8>> {
     if text.is_empty() {
         return None;
     }
+    let normalized = if text.contains('\n') {
+        let mut s = String::with_capacity(text.len() + 16);
+        let mut chars = text.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\r' {
+                s.push('\r');
+                if chars.peek() == Some(&'\n') {
+                    s.push(chars.next().unwrap());
+                } else {
+                    s.push('\n');
+                }
+            } else if c == '\n' {
+                s.push('\r');
+                s.push('\n');
+            } else {
+                s.push(c);
+            }
+        }
+        std::borrow::Cow::Owned(s)
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    };
     match format_id {
         CF_UNICODETEXT => Some(
-            text.encode_utf16()
+            normalized
+                .encode_utf16()
                 .chain(std::iter::once(0))
                 .flat_map(u16::to_le_bytes)
                 .collect(),
         ),
         CF_TEXT => {
-            let mut bytes = Vec::with_capacity(text.len() + 1);
-            bytes.extend_from_slice(text.as_bytes());
+            let mut bytes = Vec::with_capacity(normalized.len() + 1);
+            bytes.extend_from_slice(normalized.as_bytes());
             bytes.push(0);
             Some(bytes)
         }
@@ -650,6 +674,13 @@ mod tests {
         assert_eq!(encode_clipboard_text("", CF_UNICODETEXT), None);
         assert_eq!(encode_clipboard_text(text, 0xC0DE), None);
         assert_eq!(decode_utf16le(&[b'a', 0, b'b']), "a");
+
+        let multiline = "line1\nline2\r\nline3\rline4";
+        let norm_utf16 = encode_clipboard_text(multiline, CF_UNICODETEXT).unwrap();
+        assert_eq!(
+            decode_utf16le(&norm_utf16),
+            "line1\r\nline2\r\nline3\r\nline4"
+        );
     }
 
     struct TempDir(PathBuf);

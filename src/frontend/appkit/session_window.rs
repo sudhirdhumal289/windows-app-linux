@@ -723,6 +723,9 @@ impl Session {
             BridgeEvent::RemoteClipboard(content) => set_remote_clipboard(content),
             BridgeEvent::CertificatePrompt(prompt) => self.ask_certificate(&prompt),
             BridgeEvent::Network(stats) => self.show_network(&stats),
+            BridgeEvent::Cursor(kind) => self.view.set_cursor(kind),
+            BridgeEvent::CursorBitmap(bitmap) => self.view.set_cursor_bitmap(bitmap),
+            BridgeEvent::CursorPosition { x, y } => self.view.set_cursor_position(x, y),
         }
     }
 

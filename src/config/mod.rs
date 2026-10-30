@@ -157,6 +157,8 @@ pub struct AppConfig {
     pub usb_devices: Vec<String>,
     pub enable_smartcard: bool,
     pub enable_printers: bool,
+    pub timezone: String,
+    pub location: String,
 }
 
 impl Default for AppConfig {
@@ -183,6 +185,8 @@ impl Default for AppConfig {
             usb_devices: Vec::new(),
             enable_smartcard: false,
             enable_printers: false,
+            timezone: "sync".to_string(),
+            location: "sync".to_string(),
         }
     }
 }

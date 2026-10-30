@@ -46,16 +46,22 @@ impl State {
         let Some(on_done) = self.on_done.borrow_mut().take() else {
             return;
         };
-        let view_opt = self.webview.borrow_mut().take();
-        let window_opt = self.window.borrow_mut().take();
+
+        // Defer WebKit stop and window close to the next event-loop tick.
+        // Destroying an active WebKitWebView or its parent window synchronously from within
+        // a WebKit signal handler (such as `decide-policy` or `load-changed`) violates WebKitGTK
+        // reentrancy constraints and causes native assertions / SIGABRT (`Aborted`).
+        let view = self.webview.borrow_mut().take();
+        let window = self.window.borrow_mut().take();
         glib::idle_add_local_once(move || {
-            if let Some(view) = view_opt {
+            if let Some(view) = view {
                 view.stop_loading();
             }
-            if let Some(window) = window_opt {
+            if let Some(window) = window {
                 window.close();
             }
         });
+
         if redirect_url.is_some() {
             webkit::persist_session_cookies();
         }
@@ -185,8 +191,7 @@ impl RdpAuthDialog {
         let s = Rc::downgrade(state);
         window.connect_close_request(move |_| {
             if let Some(s) = s.upgrade() {
-                // `finish` would destroy the window; drop our handle first so the close
-                // proceeds normally.
+                // If closed by user, clear window so finish won't attempt redundant close.
                 s.window.borrow_mut().take();
                 s.finish(None);
             }

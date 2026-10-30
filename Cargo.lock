@@ -3179,6 +3179,7 @@ dependencies = [
  "env_logger",
  "gdk4-x11",
  "gtk4",
+ "iana-time-zone",
  "keyring",
  "libadwaita",
  "log",
