@@ -211,7 +211,7 @@ impl PreferencesDialog {
 
         // Section: Time Zone & Location
         let tz_loc_group = adw::PreferencesGroup::builder()
-            .title("Time Zone & Location")
+            .title("Time Zone &amp; Location")
             .description("Configure time zone and location redirection for remote sessions.")
             .build();
         let tz_labels: Vec<&str> = crate::session::timezone::COMMON_TIMEZONES

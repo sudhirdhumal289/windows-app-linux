@@ -153,7 +153,7 @@ pub fn show(parent: &impl IsA<gtk4::Widget>, target: LaunchTarget, name: &str) {
 
     // Regional: Time Zone & Location
     let regional = adw::PreferencesGroup::builder()
-        .title("Time Zone & Location")
+        .title("Time Zone &amp; Location")
         .description("Default uses the value from Preferences.")
         .build();
     let timezone = Choice::new(
