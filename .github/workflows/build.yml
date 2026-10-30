@@ -49,8 +49,6 @@ jobs:
   windows:
     name: Windows (WinUI 3)
     runs-on: windows-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -59,20 +57,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # build.rs automatically downloads the pinned prebuilt FreeRDP SDK in packaging/windows/freerdp-sdk.txt
       - run: cargo clippy --no-default-features --features winui
-      - name: Run Windows unit tests
-        shell: pwsh
-        run: |
-          cargo test --lib --no-default-features --features winui -- --nocapture *>&1 | Tee-Object -FilePath test-output.txt
-          $testExit = $LASTEXITCODE
-          if ($testExit -ne 0) {
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git checkout -B ci/windows-test-log
-            git add test-output.txt
-            git commit -m "Windows unit test failure log"
-            git push -f origin ci/windows-test-log
-            exit $testExit
-          }
+      - run: cargo test --lib --no-default-features --features winui
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --no-progress
