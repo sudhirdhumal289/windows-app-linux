@@ -49,6 +49,8 @@ jobs:
   windows:
     name: Windows (WinUI 3)
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -60,13 +62,16 @@ jobs:
       - name: Run Windows unit tests
         shell: pwsh
         run: |
-          $output = cargo test --lib --no-default-features --features winui -- --nocapture 2>&1
-          $code = $LASTEXITCODE
-          $output | Out-Host
-          if ($code -ne 0) {
-            $summary = ($output | Out-String)
-            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "## Windows Unit Test Failure`n``````n$summary`n``````"
-            exit $code
+          cargo test --lib --no-default-features --features winui -- --nocapture *>&1 | Tee-Object -FilePath test-output.txt
+          $testExit = $LASTEXITCODE
+          if ($testExit -ne 0) {
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git checkout -B ci/windows-test-log
+            git add test-output.txt
+            git commit -m "Windows unit test failure log"
+            git push -f origin ci/windows-test-log
+            exit $testExit
           }
       - name: Install Inno Setup
         shell: pwsh
