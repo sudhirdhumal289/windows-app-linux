@@ -211,6 +211,40 @@ sudo pacman -U ./target/packages/windows-app-*-x86_64.pkg.tar.zst
 
 ---
 
+## Release & Version Bumping
+
+The automated release script [`scripts/bump-version.sh`](scripts/bump-version.sh) synchronizes version numbers across all package descriptors (`Cargo.toml`, `Cargo.lock`, Arch `PKGBUILD`, macOS `Info.plist`, RPM `.spec`, and Windows Inno Setup `.iss`), creates the git commit and tag (`v<version>`), and pushes to origin.
+
+### Command Usage
+
+```bash
+./scripts/bump-version.sh [patch|minor|major|<specific-version>] [--no-push] [--dry-run]
+```
+
+### Examples
+
+```bash
+# Bump patch version (e.g. 0.2.5 -> 0.2.6), create tag v0.2.6, and push to origin:
+./scripts/bump-version.sh
+
+# Bump minor version (e.g. 0.2.5 -> 0.3.0), tag, and push:
+./scripts/bump-version.sh minor
+
+# Bump major version (e.g. 0.2.5 -> 1.0.0), tag, and push:
+./scripts/bump-version.sh major
+
+# Set an explicit version:
+./scripts/bump-version.sh 0.3.0
+
+# Preview changes without modifying files or git (dry run):
+./scripts/bump-version.sh --dry-run
+
+# Bump version and create git tag without pushing to remote:
+./scripts/bump-version.sh patch --no-push
+```
+
+---
+
 ## License
 
 Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.
