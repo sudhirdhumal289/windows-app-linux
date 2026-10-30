@@ -551,8 +551,20 @@ fn build_args(target: &Target<'_>, opts: &SessionOptions) -> Vec<String> {
     if let Some(user) = &opts.username {
         args.push(format!("/u:{user}"));
     }
-    if let Some(tz) = timezone::resolve_windows_timezone(&opts.timezone) {
-        args.push(format!("/timezone:{tz}"));
+    // FreeRDP on Windows automatically uses the host OS timezone. Passing /timezone: on
+    // Windows when syncing with host OS is redundant and causes argument parsing errors
+    // when FreeRDP cannot match dynamic timezone keys.
+    #[cfg(target_os = "windows")]
+    let should_add_timezone =
+        opts.timezone != "sync" && opts.timezone != timezone::SYNC_HOST_TIMEZONE;
+
+    #[cfg(not(target_os = "windows"))]
+    let should_add_timezone = true;
+
+    if should_add_timezone {
+        if let Some(tz) = timezone::resolve_windows_timezone(&opts.timezone) {
+            args.push(format!("/timezone:{tz}"));
+        }
     }
     if let Target::Direct {
         credentials: Credentials {

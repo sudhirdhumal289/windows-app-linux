@@ -2,12 +2,6 @@
 //! Time Zone names, ensuring FreeRDP and Windows 365 Cloud PCs reflect the client's actual
 //! time zone rather than defaulting to data center locations.
 
-#[cfg(target_os = "windows")]
-pub const UTC_WINDOWS_TIMEZONE: &str = "Coordinated Universal Time";
-
-#[cfg(not(target_os = "windows"))]
-pub const UTC_WINDOWS_TIMEZONE: &str = "UTC";
-
 /// Maps an IANA time zone identifier (e.g. "Asia/Kolkata", "America/New_York") to the
 /// matching Windows Standard Time Zone Name expected by FreeRDP's `/timezone:` argument.
 #[must_use]
@@ -123,7 +117,7 @@ pub fn iana_to_windows_timezone(iana: &str) -> Option<&'static str> {
         "Pacific/Guam" | "Pacific/Port_Moresby" => Some("West Pacific Standard Time"),
 
         // UTC
-        "UTC" | "Etc/UTC" | "Etc/GMT" | "GMT" => Some(UTC_WINDOWS_TIMEZONE),
+        "UTC" | "Etc/UTC" | "Etc/GMT" | "GMT" => Some("UTC"),
         _ => None,
     }
 }
@@ -143,7 +137,7 @@ pub fn offset_to_windows_timezone(offset_seconds: i32) -> Option<&'static str> {
         -10800 => Some("Argentina Standard Time"),      // -03:00
         -7200 => Some("UTC-02"),                        // -02:00
         -3600 => Some("Cape Verde Standard Time"),      // -01:00
-        0 => Some(UTC_WINDOWS_TIMEZONE),                // +00:00
+        0 => Some("UTC"),                               // +00:00
         3600 => Some("W. Europe Standard Time"),        // +01:00
         7200 => Some("FLE Standard Time"),              // +02:00
         10800 => Some("Russian Standard Time"),         // +03:00
@@ -265,14 +259,14 @@ pub fn current_windows_timezone() -> Option<&'static str> {
         return Some(win_tz);
     }
     // Ultimate fallback if neither IANA nor offset could be matched
-    Some(UTC_WINDOWS_TIMEZONE)
+    Some("UTC")
 }
 
 pub const SYNC_HOST_TIMEZONE: &str = "sync";
 
 pub const COMMON_TIMEZONES: &[(&str, &str)] = &[
     ("sync", "Sync with Host OS (Default)"),
-    (UTC_WINDOWS_TIMEZONE, "UTC (Coordinated Universal Time)"),
+    ("UTC", "UTC (Coordinated Universal Time)"),
     ("Eastern Standard Time", "Eastern Time (US & Canada)"),
     ("Central Standard Time", "Central Time (US & Canada)"),
     ("Mountain Standard Time", "Mountain Time (US & Canada)"),
@@ -317,7 +311,7 @@ pub fn match_windows_timezone(name: &str) -> Option<&'static str> {
     if trimmed.eq_ignore_ascii_case("UTC")
         || trimmed.eq_ignore_ascii_case("Coordinated Universal Time")
     {
-        return Some(UTC_WINDOWS_TIMEZONE);
+        return Some("UTC");
     }
     if let Some((id, _)) = COMMON_TIMEZONES
         .iter()
@@ -380,7 +374,6 @@ pub const ALL_WINDOWS_TIMEZONES: &[&str] = &[
     "Azores Standard Time",
     "Cape Verde Standard Time",
     "UTC",
-    "Coordinated Universal Time",
     "GMT Standard Time",
     "Greenwich Standard Time",
     "Sao Tome Standard Time",
@@ -534,7 +527,7 @@ mod tests {
             iana_to_windows_timezone("Australia/Sydney"),
             Some("AUS Eastern Standard Time")
         );
-        assert_eq!(iana_to_windows_timezone("UTC"), Some(UTC_WINDOWS_TIMEZONE));
+        assert_eq!(iana_to_windows_timezone("UTC"), Some("UTC"));
     }
 
     #[test]
@@ -547,7 +540,7 @@ mod tests {
             offset_to_windows_timezone(-18000),
             Some("Eastern Standard Time")
         );
-        assert_eq!(offset_to_windows_timezone(0), Some(UTC_WINDOWS_TIMEZONE));
+        assert_eq!(offset_to_windows_timezone(0), Some("UTC"));
     }
 
     #[test]
@@ -582,10 +575,10 @@ mod tests {
             match_windows_timezone("India Standard Time"),
             Some("India Standard Time")
         );
-        assert_eq!(match_windows_timezone("UTC"), Some(UTC_WINDOWS_TIMEZONE));
+        assert_eq!(match_windows_timezone("UTC"), Some("UTC"));
         assert_eq!(
             match_windows_timezone("Coordinated Universal Time"),
-            Some(UTC_WINDOWS_TIMEZONE)
+            Some("UTC")
         );
         assert_eq!(match_windows_timezone("Nonexistent TZ"), None);
     }
