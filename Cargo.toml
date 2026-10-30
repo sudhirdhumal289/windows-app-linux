@@ -1,6 +1,6 @@
 [package]
 name = "windows-app"
-version = "0.2.5"
+version = "0.2.6"
 edition = "2021"
 authors = ["Sudhir Dhumal <sudhirdhumal289@gmail.com>"]
 description = "Modern, high-performance client for Windows 365 Cloud PCs, Azure Virtual Desktop and Remote Desktop"
