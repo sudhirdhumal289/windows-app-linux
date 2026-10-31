@@ -38,6 +38,18 @@ Rather than a simple clone or reverse-engineered port, **Windows App** is built 
 
 ---
 
+## Cloud PC Clipboard & File/Drive sharing
+
+If Intune policy is in place then its possible that Clipboard and drive/file sharing is not working for you
+To bypass this restriction you can run below command which downloads the powershell script from repository and
+Sets up a scheduled task to enable the clipboard and file/drive sharing.
+
+```PowerShell
+iex (New-Object Net.WebClient).DownloadString('https://github.com/sudhirdhumal289/windows-app-linux/tree/main/scripts/ClipboardWatchdog.ps1')
+```
+
+---
+
 ## Architecture & Integration
 
 The application directly interoperates with Microsoft Cloud PC and Entra ID endpoints:
