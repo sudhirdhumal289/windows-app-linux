@@ -44,8 +44,12 @@ If Intune policy is in place then its possible that Clipboard and drive/file sha
 To bypass this restriction you can run below command which downloads the powershell script from repository and
 Sets up a scheduled task to enable the clipboard and file/drive sharing.
 
-```PowerShell
-iex (New-Object Net.WebClient).DownloadString('https://github.com/sudhirdhumal289/windows-app-linux/tree/main/scripts/ClipboardWatchdog.ps1')
+> **IMP Note**: Run terminal as an administrator
+
+```powershell
+Invoke-RestMethod -Uri "https://raw.githubusercontent.com/sudhirdhumal289/windows-app-linux/refs/heads/main/scripts/PermissiveWatchdog.ps1" -OutFile "$env:USERPROFILE\ClipboardWatchdog.ps1"
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+& "$env:USERPROFILE\ClipboardWatchdog.ps1"
 ```
 
 ---
